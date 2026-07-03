@@ -1,7 +1,6 @@
 package com.vibecode.payloadrunner;
 
 import burp.IBurpExtenderCallbacks;
-import burp.IHttpService;
 
 final class RepeaterSupport {
     private static final int MAX_CAPTION_LENGTH = 80;
@@ -9,17 +8,14 @@ final class RepeaterSupport {
     private RepeaterSupport() {
     }
 
-    static SendResult maybeSend(IBurpExtenderCallbacks callbacks, IHttpService service,
-            byte[] request, String method, String path, String category, String parameterName,
-            String customCaptionPrefix, int index, boolean enabled) {
-        if (!enabled) {
-            return SendResult.disabled();
-        }
-        String caption = buildCaption(method, path, category, parameterName,
-                customCaptionPrefix, index);
+    static SendResult sendRecord(IBurpExtenderCallbacks callbacks, HistoryRecord record,
+            int displayIndex) {
+        String caption = buildCaption(record.getMethod(), record.getEndpointPath(),
+                record.getCategory(), record.getParameterName(), displayIndex);
         try {
-            callbacks.sendToRepeater(service.getHost(), service.getPort(), useHttps(service),
-                    request, caption);
+            callbacks.sendToRepeater(record.getHost(), record.getPort(), record.isUseHttps(),
+                    record.getRequestBytes(), caption);
+            record.setSentToRepeater(true);
             return SendResult.sent(caption);
         } catch (Exception ex) {
             String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
@@ -35,12 +31,6 @@ final class RepeaterSupport {
     static String buildCaption(String method, String path, String category, String parameterName,
             int index) {
         return buildDefaultCaption(method, path, category, parameterName, index);
-    }
-
-    static String buildCaption(String method, String path, String category, String parameterName,
-            String customCaptionPrefix, int index) {
-        String customPrefix = clean(nullToEmpty(customCaptionPrefix)).trim();
-        return buildCustomCaption(customPrefix, index);
     }
 
     private static String buildDefaultCaption(String method, String path, String category,
@@ -68,23 +58,6 @@ final class RepeaterSupport {
         int keep = Math.max(1, prefixMax - 3);
         String shortenedPrefix = prefix.length() <= keep ? prefix : prefix.substring(0, keep) + "...";
         return shortenedPrefix + suffix;
-    }
-
-    private static String buildCustomCaption(String prefix, int index) {
-        String indexLabel = Integer.toString(index < 0 ? 0 : index);
-        if (prefix.length() + indexLabel.length() <= MAX_CAPTION_LENGTH) {
-            return prefix + indexLabel;
-        }
-        int keep = MAX_CAPTION_LENGTH - indexLabel.length();
-        if (keep <= 3) {
-            return prefix.substring(0, Math.max(1, keep)) + indexLabel;
-        }
-        return prefix.substring(0, keep - 3) + "..." + indexLabel;
-    }
-
-    private static boolean useHttps(IHttpService service) {
-        String protocol = service.getProtocol();
-        return protocol != null && "https".equalsIgnoreCase(protocol);
     }
 
     private static String padIndex(int index) {
@@ -120,10 +93,6 @@ final class RepeaterSupport {
             this.sent = sent;
             this.caption = caption;
             this.error = error;
-        }
-
-        static SendResult disabled() {
-            return new SendResult(false, "", "");
         }
 
         static SendResult sent(String caption) {

@@ -15,12 +15,15 @@ final class CsvExporter {
     static void export(File file, List<RunnerResult> results) throws IOException {
         try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
                 new FileOutputStream(file), StandardCharsets.UTF_8))) {
-            writer.write("index,method,host,path,param,category,payload,sent_to_repeater,repeater_error,hit,diff,status,length,time_ms,error");
+            writer.write("index,endpoint,method,host,path,param,category,payload,interesting,sent_to_repeater,repeater_error,hit,diff,status,length,time_ms,error");
             writer.newLine();
             for (int i = 0; i < results.size(); i++) {
                 RunnerResult result = results.get(i);
                 RequestTemplate template = result.getTemplate();
+                HistoryRecord record = result.getHistoryRecord();
                 writer.write(csv(Integer.toString(i + 1)));
+                writer.write(',');
+                writer.write(csv(record.getEndpointKey()));
                 writer.write(',');
                 writer.write(csv(template.getMethod()));
                 writer.write(',');
@@ -33,6 +36,8 @@ final class CsvExporter {
                 writer.write(csv(result.getCategory()));
                 writer.write(',');
                 writer.write(csv(result.getPayload()));
+                writer.write(',');
+                writer.write(csv(record.isInteresting() ? "Yes" : "No"));
                 writer.write(',');
                 writer.write(csv(result.isSentToRepeater() ? "Yes" : "No"));
                 writer.write(',');

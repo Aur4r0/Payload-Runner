@@ -2,36 +2,33 @@ package com.vibecode.payloadrunner;
 
 final class RunnerResult {
     private final RequestTemplate template;
-    private final String parameterName;
-    private final String category;
-    private final String payload;
-    private final byte[] request;
-    private final byte[] response;
-    private final int statusCode;
-    private final int responseLength;
-    private final long elapsedMillis;
+    private final HistoryRecord historyRecord;
     private final String hitMatch;
     private final String diffSummary;
-    private final boolean sentToRepeater;
     private final String repeaterError;
     private final String error;
+
+    RunnerResult(RequestTemplate template, HistoryRecord historyRecord, String hitMatch,
+            String diffSummary, String error) {
+        this.template = template;
+        this.historyRecord = historyRecord;
+        this.hitMatch = hitMatch == null ? "" : hitMatch;
+        this.diffSummary = diffSummary == null ? "" : diffSummary;
+        this.repeaterError = "";
+        this.error = error;
+    }
 
     RunnerResult(RequestTemplate template, String parameterName, String category, String payload,
             byte[] request, byte[] response, int statusCode, int responseLength, long elapsedMillis,
             String hitMatch, String diffSummary, boolean sentToRepeater, String repeaterError,
             String error) {
         this.template = template;
-        this.parameterName = parameterName;
-        this.category = category;
-        this.payload = payload;
-        this.request = request;
-        this.response = response;
-        this.statusCode = statusCode;
-        this.responseLength = responseLength;
-        this.elapsedMillis = elapsedMillis;
+        this.historyRecord = new HistoryRecord(0L, template, parameterName, category, payload,
+                request, response, statusCode, responseLength, elapsedMillis,
+                System.currentTimeMillis());
+        this.historyRecord.setSentToRepeater(sentToRepeater);
         this.hitMatch = hitMatch == null ? "" : hitMatch;
         this.diffSummary = diffSummary == null ? "" : diffSummary;
-        this.sentToRepeater = sentToRepeater;
         this.repeaterError = repeaterError == null ? "" : repeaterError;
         this.error = error;
     }
@@ -40,36 +37,40 @@ final class RunnerResult {
         return template;
     }
 
+    HistoryRecord getHistoryRecord() {
+        return historyRecord;
+    }
+
     String getParameterName() {
-        return parameterName;
+        return historyRecord.getParameterName();
     }
 
     String getCategory() {
-        return category;
+        return historyRecord.getCategory();
     }
 
     String getPayload() {
-        return payload;
+        return historyRecord.getPayload();
     }
 
     byte[] getRequest() {
-        return request;
+        return historyRecord.getRequestBytes();
     }
 
     byte[] getResponse() {
-        return response;
+        return historyRecord.getResponseBytes();
     }
 
     int getStatusCode() {
-        return statusCode;
+        return historyRecord.getStatusCode();
     }
 
     int getResponseLength() {
-        return responseLength;
+        return historyRecord.getResponseLength();
     }
 
     long getElapsedMillis() {
-        return elapsedMillis;
+        return historyRecord.getResponseTimeMs();
     }
 
     String getHitMatch() {
@@ -81,7 +82,7 @@ final class RunnerResult {
     }
 
     boolean isSentToRepeater() {
-        return sentToRepeater;
+        return historyRecord.isSentToRepeater();
     }
 
     String getRepeaterError() {

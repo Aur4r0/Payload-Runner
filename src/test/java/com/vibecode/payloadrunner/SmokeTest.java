@@ -30,6 +30,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import javax.swing.DefaultListModel;
+import javax.swing.JButton;
 import javax.swing.JMenuItem;
 import javax.swing.JList;
 import javax.swing.JPanel;
@@ -51,8 +52,11 @@ public final class SmokeTest {
         testResponseDiffAndHitRules();
         testRepeaterCaptionAndSend();
         testRepeaterSendFailureDoesNotThrow();
-        testCustomRepeaterCaption();
-        testSendPayloadUsesCustomRepeaterCaption();
+        testSendPayloadCreatesHistoryWithoutAutoRepeater();
+        testHistoryStoreNavigationAndLimit();
+        testEndpointKeyExcludesQuery();
+        testResultRowSelectsHistoryRecord();
+        testManualRepeaterButtons();
         testCsvExport();
         testContextMenuCapturesSelectionSnapshot();
         testCategorySelectionDoesNotExpandOnParse();
@@ -257,14 +261,19 @@ public final class SmokeTest {
         FakeHttpService service = new FakeHttpService("example.test", 443, "https");
         byte[] request = callbacks.helpers.stringToBytes("POST /api HTTP/1.1\r\n\r\n");
 
-        RepeaterSupport.SendResult result = RepeaterSupport.maybeSend(callbacks, service,
-                request, "POST", "/api/login", "sqli", "username", "", 3, true);
+        RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                FakeMessage.queryWithMarker());
+        HistoryRecord record = new HistoryRecord(1L, template, "url:id", "sqli", "42",
+                request, null, 200, 0, 3L, System.currentTimeMillis());
+
+        RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record, 3);
         assertEquals(true, result.isSent(), "repeater send success");
         assertEquals(1, callbacks.repeaterSendCount, "repeater send count");
         assertEquals("example.test", callbacks.repeaterHost, "repeater host");
-        assertEquals(443, callbacks.repeaterPort, "repeater port");
-        assertEquals(true, callbacks.repeaterUseHttps, "repeater https");
-        assertEquals("3", callbacks.repeaterCaption, "empty repeater name uses index caption");
+        assertEquals(80, callbacks.repeaterPort, "repeater port");
+        assertEquals(false, callbacks.repeaterUseHttps, "repeater https");
+        assertEquals("POST /submit | sqli | url:id | #003", callbacks.repeaterCaption,
+                "manual repeater caption");
 
         String longCaption = RepeaterSupport.buildCaption("POST",
                 "/very/long/path/that/keeps/going/and/going/and/going/and/going",
@@ -277,35 +286,19 @@ public final class SmokeTest {
     private static void testRepeaterSendFailureDoesNotThrow() {
         FakeCallbacks callbacks = new FakeCallbacks();
         callbacks.failRepeaterSend = true;
-        RepeaterSupport.SendResult result = RepeaterSupport.maybeSend(callbacks,
-                new FakeHttpService(), callbacks.helpers.stringToBytes("GET / HTTP/1.1\r\n\r\n"),
-                "GET", "/", "ids", "url:id", "", 1, true);
+        RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                FakeMessage.queryWithMarker());
+        HistoryRecord record = new HistoryRecord(1L, template, "url:id", "ids", "42",
+                callbacks.helpers.stringToBytes("GET / HTTP/1.1\r\n\r\n"), null, 200, 0,
+                1L, System.currentTimeMillis());
+        RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record, 1);
         assertEquals(false, result.isSent(), "repeater send failure");
         assertEquals(true, result.getError().contains("boom"), "repeater send error");
         assertEquals(true, callbacks.lastError.contains("sendToRepeater failed"),
                 "repeater error logged");
     }
 
-    private static void testCustomRepeaterCaption() {
-        FakeCallbacks callbacks = new FakeCallbacks();
-        RepeaterSupport.SendResult result = RepeaterSupport.maybeSend(callbacks,
-                new FakeHttpService(), callbacks.helpers.stringToBytes("GET / HTTP/1.1\r\n\r\n"),
-                "GET", "/", "ids", "url:id", "查询", 2, true);
-        assertEquals(true, result.isSent(), "custom repeater send success");
-        assertEquals("查询2", callbacks.repeaterCaption, "custom repeater caption");
-
-        String fallback = RepeaterSupport.buildCaption("GET", "/", "ids", "url:id",
-                "   ", 2);
-        assertEquals("2", fallback, "blank custom caption uses index only");
-
-        String longCaption = RepeaterSupport.buildCaption("GET", "/", "ids", "url:id",
-                "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
-                123);
-        assertEquals(true, longCaption.length() <= 80, "custom caption max length");
-        assertContains(longCaption, "123", "custom caption keeps index");
-    }
-
-    private static void testSendPayloadUsesCustomRepeaterCaption() throws Exception {
+    private static void testSendPayloadCreatesHistoryWithoutAutoRepeater() throws Exception {
         final FakeCallbacks callbacks = new FakeCallbacks();
         SwingUtilities.invokeAndWait(() -> {
             try {
@@ -317,12 +310,143 @@ public final class SmokeTest {
                 invokePrivate(panel, "sendPayload",
                         new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
                                 String.class, String.class, EncodingStrategy.class, List.class,
-                                boolean.class, String.class, int.class},
+                                int.class},
                         template, insertionPoint, "ids", "42", EncodingStrategy.URL_ENCODE,
-                        Collections.<HitRule>emptyList(), Boolean.TRUE, "查询", Integer.valueOf(3));
+                        Collections.<HitRule>emptyList(), Integer.valueOf(3));
 
-                assertEquals("查询3", callbacks.repeaterCaption,
-                        "sendPayload custom repeater caption");
+                RunnerResult result = (RunnerResult) invokePrivate(panel, "sendPayload",
+                        new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
+                                String.class, String.class, EncodingStrategy.class, List.class,
+                                int.class},
+                        template, insertionPoint, "ids", "43", EncodingStrategy.URL_ENCODE,
+                        Collections.<HitRule>emptyList(), Integer.valueOf(4));
+                assertEquals(0, callbacks.repeaterSendCount, "sendPayload does not auto repeater");
+                assertContains(result.getHistoryRecord().getEndpointKey(),
+                        "POST http://example.test:80/submit", "history endpoint key");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testHistoryStoreNavigationAndLimit() {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                FakeMessage.queryWithMarker());
+        HistoryStore store = new HistoryStore(2);
+        HistoryRecord first = new HistoryRecord(store.nextId(), template, "url:id", "ids", "1",
+                callbacks.helpers.stringToBytes("GET /1 HTTP/1.1\r\n\r\n"), null, 200, 0,
+                1L, System.currentTimeMillis());
+        HistoryRecord second = new HistoryRecord(store.nextId(), template, "url:id", "ids", "2",
+                callbacks.helpers.stringToBytes("GET /2 HTTP/1.1\r\n\r\n"), null, 200, 0,
+                1L, System.currentTimeMillis());
+        HistoryRecord third = new HistoryRecord(store.nextId(), template, "url:id", "ids", "3",
+                callbacks.helpers.stringToBytes("GET /3 HTTP/1.1\r\n\r\n"), null, 200, 0,
+                1L, System.currentTimeMillis());
+
+        store.append(first);
+        store.append(second);
+        assertEquals(2, store.size(first.getEndpointKey()), "history size before trim");
+        assertEquals(true, store.next(first.getEndpointKey()) == second, "history next");
+        HistoryStore.AppendResult appendResult = store.append(third);
+        assertEquals(1, appendResult.getDroppedCount(), "history trim dropped oldest");
+        assertEquals(2, store.size(first.getEndpointKey()), "history size after trim");
+        assertEquals(-1, store.indexOf(first), "oldest history removed");
+        assertEquals(true, store.currentRecord(first.getEndpointKey()) == second,
+                "current record adjusted after trim");
+    }
+
+    private static void testEndpointKeyExcludesQuery() {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                FakeMessage.queryWithMarker());
+        HistoryRecord record = new HistoryRecord(1L, template, "url:id", "ids", "42",
+                callbacks.helpers.stringToBytes("POST /submit?id=42 HTTP/1.1\r\n\r\n"),
+                null, 200, 0, 1L, System.currentTimeMillis());
+
+        assertEquals("POST http://example.test:80/submit", record.getEndpointKey(),
+                "endpoint key strips query");
+    }
+
+    private static void testResultRowSelectsHistoryRecord() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                        FakeMessage.queryWithMarker());
+                ResultTableModel resultModel = (ResultTableModel) privateField(panel, "resultModel");
+                JTable resultTable = (JTable) privateField(panel, "resultTable");
+                HistoryStore historyStore = (HistoryStore) privateField(panel, "historyStore");
+
+                HistoryRecord first = new HistoryRecord(historyStore.nextId(), template, "url:id",
+                        "ids", "1", callbacks.helpers.stringToBytes("GET /1 HTTP/1.1\r\n\r\n"),
+                        null, 200, 0, 1L, System.currentTimeMillis());
+                HistoryRecord second = new HistoryRecord(historyStore.nextId(), template, "url:id",
+                        "ids", "2", callbacks.helpers.stringToBytes("GET /2 HTTP/1.1\r\n\r\n"),
+                        null, 200, 0, 1L, System.currentTimeMillis());
+                resultModel.addResult(new RunnerResult(template, first, "", "", null));
+                resultModel.addResult(new RunnerResult(template, second, "", "", null));
+                historyStore.append(first);
+                historyStore.append(second);
+
+                resultTable.setRowSelectionInterval(1, 1);
+
+                HistoryRecord selected =
+                        (HistoryRecord) privateField(panel, "currentHistoryRecord");
+                assertEquals(true, selected == second, "selected row updates current history");
+                assertEquals(true, historyStore.currentRecord(second.getEndpointKey()) == second,
+                        "selected row updates endpoint current index");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testManualRepeaterButtons() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                        FakeMessage.queryWithMarker());
+                ResultTableModel resultModel = (ResultTableModel) privateField(panel, "resultModel");
+                JTable resultTable = (JTable) privateField(panel, "resultTable");
+                HistoryStore historyStore = (HistoryStore) privateField(panel, "historyStore");
+                JButton sendCurrent =
+                        (JButton) privateField(panel, "sendCurrentRepeaterButton");
+                JButton sendSelected =
+                        (JButton) privateField(panel, "sendSelectedRepeaterButton");
+                JButton sendInteresting =
+                        (JButton) privateField(panel, "sendInterestingRepeaterButton");
+
+                HistoryRecord first = new HistoryRecord(historyStore.nextId(), template, "url:id",
+                        "ids", "1", callbacks.helpers.stringToBytes("GET /1 HTTP/1.1\r\n\r\n"),
+                        null, 200, 0, 1L, System.currentTimeMillis());
+                HistoryRecord second = new HistoryRecord(historyStore.nextId(), template, "url:id",
+                        "xss", "<x>", callbacks.helpers.stringToBytes("GET /2 HTTP/1.1\r\n\r\n"),
+                        null, 200, 0, 1L, System.currentTimeMillis());
+                resultModel.addResult(new RunnerResult(template, first, "", "", null));
+                resultModel.addResult(new RunnerResult(template, second, "", "", null));
+                historyStore.append(first);
+                historyStore.append(second);
+
+                assertEquals(0, callbacks.repeaterSendCount, "no automatic repeater send");
+
+                invokePrivate(panel, "showHistoryRecord",
+                        new Class<?>[] {HistoryRecord.class}, first);
+                sendCurrent.doClick();
+                assertEquals(1, callbacks.repeaterSendCount, "current repeater send count");
+                assertEquals(true, first.isSentToRepeater(), "current record sent flag");
+
+                resultTable.setRowSelectionInterval(0, 1);
+                sendSelected.doClick();
+                assertEquals(3, callbacks.repeaterSendCount, "selected repeater send count");
+                assertEquals(true, second.isSentToRepeater(), "selected record sent flag");
+
+                second.setInteresting(true);
+                sendInteresting.doClick();
+                assertEquals(4, callbacks.repeaterSendCount, "interesting repeater send count");
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
@@ -510,14 +634,16 @@ public final class SmokeTest {
                 JTable resultTable = (JTable) privateField(panel, "resultTable");
                 resultModel.addResult(first);
                 resultModel.addResult(second);
-                resultTable.getRowSorter().toggleSortOrder(6);
+                resultTable.getRowSorter().toggleSortOrder(7);
 
                 assertEquals(1, resultTable.convertRowIndexToModel(0),
                         "sorted first view row maps to second model row");
                 resultTable.setRowSelectionInterval(0, 0);
 
-                RunnerResult selected = (RunnerResult) privateField(panel, "selectedResult");
-                assertEquals(true, selected == second, "sorted result selection identity");
+                HistoryRecord selected =
+                        (HistoryRecord) privateField(panel, "currentHistoryRecord");
+                assertEquals(true, selected == second.getHistoryRecord(),
+                        "sorted result selection history identity");
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }

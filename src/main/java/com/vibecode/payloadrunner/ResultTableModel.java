@@ -6,16 +6,18 @@ import javax.swing.table.AbstractTableModel;
 
 final class ResultTableModel extends AbstractTableModel {
     private static final String[] COLUMNS = {
-            "#", "Method", "Host", "Path", "Param", "Category", "Payload",
-            "Sent to Repeater", "Hit", "Diff", "Status", "Length", "Time ms"
+            "#", "Endpoint", "Method", "Host", "Path", "Param", "Category", "Payload",
+            "Interesting", "Sent to Repeater", "Hit", "Diff", "Status", "Length", "Time ms"
     };
 
     private final List<RunnerResult> results = new ArrayList<RunnerResult>();
 
-    void addResult(RunnerResult result) {
+    int addResult(RunnerResult result) {
         int row = results.size();
         results.add(result);
+        result.getHistoryRecord().setResultRowId(row);
         fireTableRowsInserted(row, row);
+        return row;
     }
 
     RunnerResult getResult(int row) {
@@ -28,6 +30,27 @@ final class ResultTableModel extends AbstractTableModel {
         if (last >= 0) {
             fireTableRowsDeleted(0, last);
         }
+    }
+
+    void fireRecordUpdated(HistoryRecord record) {
+        int row = rowFor(record);
+        if (row >= 0) {
+            fireTableRowsUpdated(row, row);
+        }
+    }
+
+    int rowFor(HistoryRecord record) {
+        int rowId = record.getResultRowId();
+        if (rowId >= 0 && rowId < results.size()
+                && results.get(rowId).getHistoryRecord().getId() == record.getId()) {
+            return rowId;
+        }
+        for (int i = 0; i < results.size(); i++) {
+            if (results.get(i).getHistoryRecord().getId() == record.getId()) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     @Override
@@ -47,10 +70,10 @@ final class ResultTableModel extends AbstractTableModel {
 
     @Override
     public Class<?> getColumnClass(int columnIndex) {
-        if (columnIndex == 0 || columnIndex == 11) {
+        if (columnIndex == 0 || columnIndex == 13) {
             return Integer.class;
         }
-        if (columnIndex == 12) {
+        if (columnIndex == 14) {
             return Long.class;
         }
         return String.class;
@@ -64,34 +87,39 @@ final class ResultTableModel extends AbstractTableModel {
     public Object getValueAt(int rowIndex, int columnIndex) {
         RunnerResult result = results.get(rowIndex);
         RequestTemplate template = result.getTemplate();
+        HistoryRecord record = result.getHistoryRecord();
         switch (columnIndex) {
             case 0:
                 return rowIndex + 1;
             case 1:
-                return template.getMethod();
+                return record.getEndpointKey();
             case 2:
-                return template.getHost();
+                return template.getMethod();
             case 3:
-                return template.getPath();
+                return template.getHost();
             case 4:
-                return result.getParameterName();
+                return template.getPath();
             case 5:
-                return result.getCategory();
+                return result.getParameterName();
             case 6:
-                return result.getPayload();
+                return result.getCategory();
             case 7:
-                return result.isSentToRepeater() ? "Yes" : "No";
+                return record.payloadPreview();
             case 8:
-                return result.getHitMatch();
+                return record.isInteresting() ? "Yes" : "No";
             case 9:
-                return result.getDiffSummary();
+                return result.isSentToRepeater() ? "Yes" : "No";
             case 10:
+                return result.getHitMatch();
+            case 11:
+                return result.getDiffSummary();
+            case 12:
                 return result.getError() == null
                         ? Integer.toString(result.getStatusCode())
                         : "ERR: " + result.getError();
-            case 11:
+            case 13:
                 return result.getResponseLength();
-            case 12:
+            case 14:
                 return result.getElapsedMillis();
             default:
                 return "";

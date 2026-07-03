@@ -23,7 +23,8 @@ parameters whose values contain `*`.
   - `Raw`
 - Pause/resume and stop controls
 - Keyword matching against responses
-- Optional `Auto send to Repeater` switch, off by default, with custom tab name prefix
+- Internal Request History grouped by endpoint
+- Manual Repeater sending for current, selected, or interesting history records
 - Hit rules:
   - `keyword:admin`
   - `regex:uid=\d+`
@@ -32,8 +33,8 @@ parameters whose values contain `*`.
   - `diff>200`
   - `sim<90`
 - Response diff against the original Burp message response
-- Results table with Repeater sync status, hit, diff, status code, response length, and elapsed time
-- Click a result row to view the generated request and response
+- Results table with endpoint, Repeater send status, interesting flag, hit, diff, status code, response length, and elapsed time
+- Click a result row to open its generated request and response in the History Viewer
 - Export results to CSV
 - Built-in payload YAML extracted from `测试payload速取.xlsx`
 
@@ -58,8 +59,8 @@ so Burp's own API classes are used at runtime.
 sh scripts/test.sh
 ```
 
-The smoke test covers YAML category parsing plus form-urlencoded and JSON body
-marker replacement.
+The smoke test covers YAML parsing, marker replacement, history navigation,
+manual Repeater sending, result selection, CSV export, and queue actions.
 
 ## Refresh Built-in Payloads
 
@@ -95,15 +96,21 @@ each category become payload entries in the built-in YAML.
      清空选择。
    - `Encoding`：选择 payload 写入请求时的编码策略：`URL encode`、
      `JSON escape` 或 `Raw`。
-   - `Auto send to Repeater`：开启后，每个变体请求会同步发送到 Burp
-     Repeater。
-   - `Repeater name`：Auto Repeater 的 tab 前缀。留空时命名为 `1`,
-     `2`, `3`；填写 `查询` 时命名为 `查询1`, `查询2`, `查询3`。
+   - `Max history`：每个 endpoint 最多保留多少条请求历史，默认 500；
+     超过后丢弃最旧记录。
    - `Keywords` / `Hit rules`：设置响应命中规则。
 4. 点击 `Run Selected` 开始运行。
-5. 在 `Results` 页面查看状态码、长度、耗时、命中规则、diff 和是否发送到
-   Repeater。点击任意结果行可查看该变体的完整请求和响应。
-6. 运行中可以 `Pause` / `Resume` / `Stop`。需要保存结果时点击 `Export CSV`。
+5. 在 `Results` 页面查看状态码、长度、耗时、命中规则、diff、Interesting 和
+   Sent to Repeater。点击任意结果行会在 `Request History` 中定位到该变体。
+6. 在 `Request History` 中按 endpoint 浏览记录：
+   - `Previous` / `Next` 在当前 endpoint 内前进后退。
+   - `Follow latest` 默认开启，新结果会自动跳到最新记录；关闭后不会打断当前查看位置。
+   - `Mark interesting` / `Unmark interesting` 手动标记值得复查的记录。
+7. 需要把包送到 Burp Repeater 时，使用手动按钮：
+   - `Send current to Repeater`：发送当前 History 记录。
+   - `Send selected rows to Repeater`：发送结果表中选中的记录。
+   - `Send interesting to Repeater`：发送所有已标记 Interesting 的记录。
+8. 运行中可以 `Pause` / `Resume` / `Stop`。需要保存结果时点击 `Export CSV`。
 
 ## YAML Format
 
@@ -136,11 +143,13 @@ Response diff compares each payload response with the original response attached
 to the Burp message that was sent to Payload Runner. If the source message has
 no response, the `Diff` column is blank.
 
-When `Auto send to Repeater` is enabled, each mutated request is also sent to
-Burp Repeater from the background runner thread. If `Repeater name` is empty,
-the Repeater tab caption is the run index, for example `1`, `2`, `3`.
+Payload runs no longer auto-open Repeater tabs for every variant. Each mutated
+request and response is stored in the plugin's Request History. Repeater only
+receives records when you click one of the manual send buttons.
 
-If `Repeater name` is filled, the caption uses that value plus the run index,
-for example `查询1`, `查询2`, `查询3`. Captions are capped at 80 characters.
+History endpoint grouping uses `METHOD + scheme + host + port + path`; query
+parameters are intentionally excluded so variants of the same interface stay in
+one list. Repeater tab captions use
+`METHOD PATH | CATEGORY | PARAM | #INDEX` and are capped at 80 characters.
 Repeater send failures are logged through Burp extension stderr and do not stop
 the payload run.

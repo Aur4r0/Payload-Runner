@@ -79,19 +79,32 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JButton resetRulesButton = new JButton("Reset Rules");
     private final JButton selectAllCategoriesButton = new JButton("All");
     private final JButton clearCategoriesButton = new JButton("None");
-    private final JCheckBox autoSendRepeaterCheckBox = new JCheckBox("Auto send to Repeater");
+    private final JButton previousHistoryButton = new JButton("Previous");
+    private final JButton nextHistoryButton = new JButton("Next");
+    private final JButton sendCurrentRepeaterButton = new JButton("Send current to Repeater");
+    private final JButton sendSelectedRepeaterButton = new JButton("Send selected rows to Repeater");
+    private final JButton sendInterestingRepeaterButton = new JButton("Send interesting to Repeater");
+    private final JButton markInterestingButton = new JButton("Mark interesting");
+    private final JCheckBox followLatestCheckBox = new JCheckBox("Follow latest", true);
     private final JComboBox<EncodingStrategy> encodingCombo =
             new JComboBox<EncodingStrategy>(EncodingStrategy.values());
-    private final JTextField repeaterCaptionField = new JTextField(12);
+    private final JComboBox<String> endpointCombo = new JComboBox<String>();
+    private final JTextField maxHistoryField = new JTextField("500", 4);
     private final JTextField keywordField = new JTextField(24);
+    private final JLabel historyPositionLabel = new JLabel("#000 / 0");
+    private final JLabel historyCategoryLabel = new JLabel("Category: -");
+    private final JLabel historyParamLabel = new JLabel("Param: -");
+    private final JLabel historyPayloadLabel = new JLabel("Payload: -");
     private final IMessageEditor requestViewer;
     private final IMessageEditor responseViewer;
     private JTabbedPane mainTabs;
 
     private final Object pauseLock = new Object();
+    private final HistoryStore historyStore = new HistoryStore(500);
     private Map<String, List<String>> parsedPayloads = new LinkedHashMap<String, List<String>>();
     private SwingWorker<Void, RunnerResult> activeWorker;
-    private RunnerResult selectedResult;
+    private HistoryRecord currentHistoryRecord;
+    private boolean updatingEndpointCombo;
     private volatile boolean paused;
 
     PayloadRunnerPanel(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers) {
@@ -230,9 +243,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         configButtonRow.add(resetPayloadsButton);
         configButtonRow.add(new JLabel("Encoding"));
         configButtonRow.add(encodingCombo);
-        configButtonRow.add(autoSendRepeaterCheckBox);
-        configButtonRow.add(new JLabel("Repeater name"));
-        configButtonRow.add(repeaterCaptionField);
+        configButtonRow.add(new JLabel("Max history"));
+        configButtonRow.add(maxHistoryField);
         configButtonRow.add(new JLabel("Keywords"));
         configButtonRow.add(keywordField);
         runButtonRow.add(runButton);
@@ -247,7 +259,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         runnerPage.add(configSplit, BorderLayout.CENTER);
         runnerPage.add(runnerControlPanel, BorderLayout.SOUTH);
 
-        resultTable.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        resultTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         resultTable.setAutoCreateRowSorter(true);
         configureResultColumns(resultTable.getColumnModel());
         JPanel resultPanel = new JPanel(new BorderLayout(4, 4));
@@ -260,13 +272,38 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         messageSplit.setResizeWeight(0.5);
         messageSplit.setPreferredSize(new Dimension(900, 280));
 
-        JSplitPane lowerSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, resultPanel, messageSplit);
+        JPanel historyHeaderPanel = new JPanel(new BorderLayout(4, 4));
+        historyHeaderPanel.setBorder(BorderFactory.createTitledBorder("Request History"));
+        JPanel historyNavPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        historyNavPanel.add(new JLabel("Endpoint"));
+        endpointCombo.setPrototypeDisplayValue("POST https://example.com:443/api/search");
+        historyNavPanel.add(endpointCombo);
+        historyNavPanel.add(previousHistoryButton);
+        historyNavPanel.add(nextHistoryButton);
+        historyNavPanel.add(historyPositionLabel);
+        historyNavPanel.add(followLatestCheckBox);
+        JPanel historyMetaPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        historyMetaPanel.add(historyCategoryLabel);
+        historyMetaPanel.add(historyParamLabel);
+        historyMetaPanel.add(historyPayloadLabel);
+        historyHeaderPanel.add(historyNavPanel, BorderLayout.NORTH);
+        historyHeaderPanel.add(historyMetaPanel, BorderLayout.SOUTH);
+
+        JPanel historyViewerPanel = new JPanel(new BorderLayout(4, 4));
+        historyViewerPanel.add(historyHeaderPanel, BorderLayout.NORTH);
+        historyViewerPanel.add(messageSplit, BorderLayout.CENTER);
+
+        JSplitPane lowerSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, resultPanel, historyViewerPanel);
         lowerSplit.setResizeWeight(0.45);
         lowerSplit.setContinuousLayout(true);
 
         JPanel resultControlPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         resultControlPanel.add(pauseButton);
         resultControlPanel.add(stopButton);
+        resultControlPanel.add(markInterestingButton);
+        resultControlPanel.add(sendCurrentRepeaterButton);
+        resultControlPanel.add(sendSelectedRepeaterButton);
+        resultControlPanel.add(sendInterestingRepeaterButton);
         resultControlPanel.add(clearResultsButton);
         resultControlPanel.add(exportButton);
 
@@ -280,22 +317,25 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
         add(mainTabs, BorderLayout.CENTER);
         add(statusLabel, BorderLayout.SOUTH);
+        updateHistoryHeader();
     }
 
     private void configureResultColumns(TableColumnModel columns) {
         columns.getColumn(0).setPreferredWidth(44);
-        columns.getColumn(1).setPreferredWidth(58);
-        columns.getColumn(2).setPreferredWidth(140);
-        columns.getColumn(3).setPreferredWidth(180);
-        columns.getColumn(4).setPreferredWidth(120);
-        columns.getColumn(5).setPreferredWidth(90);
-        columns.getColumn(6).setPreferredWidth(220);
-        columns.getColumn(7).setPreferredWidth(120);
+        columns.getColumn(1).setPreferredWidth(260);
+        columns.getColumn(2).setPreferredWidth(58);
+        columns.getColumn(3).setPreferredWidth(140);
+        columns.getColumn(4).setPreferredWidth(180);
+        columns.getColumn(5).setPreferredWidth(120);
+        columns.getColumn(6).setPreferredWidth(90);
+        columns.getColumn(7).setPreferredWidth(220);
         columns.getColumn(8).setPreferredWidth(90);
-        columns.getColumn(9).setPreferredWidth(130);
-        columns.getColumn(10).setPreferredWidth(80);
-        columns.getColumn(11).setPreferredWidth(80);
+        columns.getColumn(9).setPreferredWidth(120);
+        columns.getColumn(10).setPreferredWidth(90);
+        columns.getColumn(11).setPreferredWidth(130);
         columns.getColumn(12).setPreferredWidth(80);
+        columns.getColumn(13).setPreferredWidth(80);
+        columns.getColumn(14).setPreferredWidth(80);
     }
 
     private void wireActions() {
@@ -308,6 +348,17 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         clearCategoriesButton.addActionListener(event -> clearCategorySelection());
         runButton.addActionListener(event -> runSelectedCategories());
         pauseButton.addActionListener(event -> togglePause());
+        previousHistoryButton.addActionListener(event -> previousHistory());
+        nextHistoryButton.addActionListener(event -> nextHistory());
+        endpointCombo.addActionListener(event -> {
+            if (!updatingEndpointCombo) {
+                showEndpointCurrentRecord((String) endpointCombo.getSelectedItem());
+            }
+        });
+        markInterestingButton.addActionListener(event -> toggleInteresting());
+        sendCurrentRepeaterButton.addActionListener(event -> sendCurrentToRepeater());
+        sendSelectedRepeaterButton.addActionListener(event -> sendSelectedRowsToRepeater());
+        sendInterestingRepeaterButton.addActionListener(event -> sendInterestingToRepeater());
         stopButton.addActionListener(event -> {
             if (activeWorker != null) {
                 resumeIfPaused();
@@ -325,9 +376,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         });
         clearResultsButton.addActionListener(event -> {
             resultModel.clear();
-            selectedResult = null;
-            requestViewer.setMessage(null, true);
-            responseViewer.setMessage(null, false);
+            historyStore.clear();
+            currentHistoryRecord = null;
+            clearEndpointCombo();
+            showHistoryRecord(null);
             statusLabel.setText("Results cleared.");
         });
         exportButton.addActionListener(event -> exportResults());
@@ -410,6 +462,238 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
         statusLabel.setText("Deleted " + selected.length + " queued request"
                 + (selected.length == 1 ? "." : "s."));
+    }
+
+    private void clearEndpointCombo() {
+        updatingEndpointCombo = true;
+        try {
+            endpointCombo.removeAllItems();
+        } finally {
+            updatingEndpointCombo = false;
+        }
+    }
+
+    private void updateEndpointCombo() {
+        String selected = currentHistoryRecord == null
+                ? (String) endpointCombo.getSelectedItem()
+                : currentHistoryRecord.getEndpointKey();
+        List<String> endpointKeys = historyStore.endpointKeys();
+        updatingEndpointCombo = true;
+        try {
+            endpointCombo.removeAllItems();
+            for (String endpointKey : endpointKeys) {
+                endpointCombo.addItem(endpointKey);
+            }
+            if (selected != null && endpointKeys.contains(selected)) {
+                endpointCombo.setSelectedItem(selected);
+            } else if (!endpointKeys.isEmpty()) {
+                endpointCombo.setSelectedIndex(0);
+            }
+        } finally {
+            updatingEndpointCombo = false;
+        }
+    }
+
+    private boolean shouldShowNewRecord(HistoryRecord record) {
+        return currentHistoryRecord == null || followLatestCheckBox.isSelected();
+    }
+
+    private void showEndpointCurrentRecord(String endpointKey) {
+        if (endpointKey == null || endpointKey.isEmpty()) {
+            showHistoryRecord(null);
+            return;
+        }
+        showHistoryRecord(historyStore.currentRecord(endpointKey));
+    }
+
+    private void previousHistory() {
+        String endpointKey = currentEndpointKey();
+        if (endpointKey == null) {
+            return;
+        }
+        showHistoryRecord(historyStore.previous(endpointKey));
+    }
+
+    private void nextHistory() {
+        String endpointKey = currentEndpointKey();
+        if (endpointKey == null) {
+            return;
+        }
+        showHistoryRecord(historyStore.next(endpointKey));
+    }
+
+    private String currentEndpointKey() {
+        if (currentHistoryRecord != null) {
+            return currentHistoryRecord.getEndpointKey();
+        }
+        Object selected = endpointCombo.getSelectedItem();
+        return selected == null ? null : selected.toString();
+    }
+
+    private void showHistoryRecord(HistoryRecord record) {
+        currentHistoryRecord = record;
+        if (record == null) {
+            requestViewer.setMessage(null, true);
+            responseViewer.setMessage(null, false);
+            updateHistoryHeader();
+            return;
+        }
+
+        historyStore.select(record);
+        if (endpointCombo.getItemCount() == 0) {
+            updateEndpointCombo();
+        }
+        updatingEndpointCombo = true;
+        try {
+            endpointCombo.setSelectedItem(record.getEndpointKey());
+        } finally {
+            updatingEndpointCombo = false;
+        }
+        requestViewer.setMessage(record.getRequestBytes(), true);
+        responseViewer.setMessage(record.getResponseBytes(), false);
+        updateHistoryHeader();
+    }
+
+    private void updateHistoryHeader() {
+        if (currentHistoryRecord == null) {
+            historyPositionLabel.setText("#000 / 0");
+            historyCategoryLabel.setText("Category: -");
+            historyParamLabel.setText("Param: -");
+            historyPayloadLabel.setText("Payload: -");
+            previousHistoryButton.setEnabled(false);
+            nextHistoryButton.setEnabled(false);
+            sendCurrentRepeaterButton.setEnabled(false);
+            markInterestingButton.setEnabled(false);
+            markInterestingButton.setText("Mark interesting");
+            return;
+        }
+
+        int index = historyStore.indexOf(currentHistoryRecord);
+        int size = historyStore.size(currentHistoryRecord.getEndpointKey());
+        if (index >= 0) {
+            historyPositionLabel.setText("#" + pad3(index + 1) + " / " + size);
+        } else {
+            historyPositionLabel.setText("#- / " + size);
+        }
+        historyCategoryLabel.setText("Category: " + currentHistoryRecord.getCategory());
+        historyParamLabel.setText("Param: " + currentHistoryRecord.getParameterName());
+        historyPayloadLabel.setText("Payload: " + currentHistoryRecord.payloadPreview());
+        previousHistoryButton.setEnabled(index > 0);
+        nextHistoryButton.setEnabled(index >= 0 && index < size - 1);
+        sendCurrentRepeaterButton.setEnabled(true);
+        markInterestingButton.setEnabled(true);
+        markInterestingButton.setText(currentHistoryRecord.isInteresting()
+                ? "Unmark interesting"
+                : "Mark interesting");
+    }
+
+    private String pad3(int value) {
+        if (value < 0) {
+            value = 0;
+        }
+        if (value >= 1000) {
+            return Integer.toString(value);
+        }
+        String text = Integer.toString(value);
+        StringBuilder padded = new StringBuilder();
+        for (int i = text.length(); i < 3; i++) {
+            padded.append('0');
+        }
+        return padded.append(text).toString();
+    }
+
+    private void toggleInteresting() {
+        if (currentHistoryRecord == null) {
+            statusLabel.setText("Select a history record first.");
+            return;
+        }
+        currentHistoryRecord.setInteresting(!currentHistoryRecord.isInteresting());
+        resultModel.fireRecordUpdated(currentHistoryRecord);
+        updateHistoryHeader();
+        statusLabel.setText(currentHistoryRecord.isInteresting()
+                ? "Marked current history record interesting."
+                : "Unmarked current history record.");
+    }
+
+    private void sendCurrentToRepeater() {
+        if (currentHistoryRecord == null) {
+            statusLabel.setText("Select a history record first.");
+            return;
+        }
+        sendRecordsToRepeater(singleton(currentHistoryRecord), "current history record");
+    }
+
+    private void sendSelectedRowsToRepeater() {
+        List<HistoryRecord> records = selectedResultRecords();
+        if (records.isEmpty()) {
+            statusLabel.setText("Select result row(s) to send to Repeater.");
+            return;
+        }
+        sendRecordsToRepeater(records, "selected result row(s)");
+    }
+
+    private void sendInterestingToRepeater() {
+        List<HistoryRecord> records = new ArrayList<HistoryRecord>();
+        for (RunnerResult result : resultModel.snapshot()) {
+            HistoryRecord record = result.getHistoryRecord();
+            if (record.isInteresting()) {
+                records.add(record);
+            }
+        }
+        if (records.isEmpty()) {
+            statusLabel.setText("No interesting history records to send.");
+            return;
+        }
+        sendRecordsToRepeater(records, "interesting history record(s)");
+    }
+
+    private List<HistoryRecord> singleton(HistoryRecord record) {
+        List<HistoryRecord> records = new ArrayList<HistoryRecord>();
+        records.add(record);
+        return records;
+    }
+
+    private List<HistoryRecord> selectedResultRecords() {
+        List<HistoryRecord> records = new ArrayList<HistoryRecord>();
+        int[] rows = resultTable.getSelectedRows();
+        for (int row : rows) {
+            int modelRow = resultTable.convertRowIndexToModel(row);
+            records.add(resultModel.getResult(modelRow).getHistoryRecord());
+        }
+        return records;
+    }
+
+    private void sendRecordsToRepeater(List<HistoryRecord> records, String label) {
+        int sent = 0;
+        String error = "";
+        for (HistoryRecord record : records) {
+            RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record,
+                    displayIndex(record));
+            if (result.isSent()) {
+                sent++;
+                resultModel.fireRecordUpdated(record);
+            } else if (error.isEmpty()) {
+                error = result.getError();
+            }
+        }
+        if (error.isEmpty()) {
+            statusLabel.setText("Sent " + sent + " " + label + " to Repeater.");
+        } else {
+            statusLabel.setText("Sent " + sent + " " + label
+                    + " to Repeater. Last error: " + truncateStatus(error));
+        }
+        updateHistoryHeader();
+    }
+
+    private int displayIndex(HistoryRecord record) {
+        int index = historyStore.indexOf(record);
+        if (index >= 0) {
+            return index + 1;
+        }
+        if (record.getResultRowId() >= 0) {
+            return record.getResultRowId() + 1;
+        }
+        return 1;
     }
 
     private boolean parseYamlIntoCategories(boolean showDialogOnError) {
@@ -546,8 +830,18 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         Map<String, List<String>> selectedPayloads = new LinkedHashMap<String, List<String>>();
         final EncodingStrategy encodingStrategy =
                 (EncodingStrategy) encodingCombo.getSelectedItem();
-        final boolean autoSendToRepeater = autoSendRepeaterCheckBox.isSelected();
-        final String repeaterCaptionPrefix = repeaterCaptionField.getText();
+        int maxHistoryRecords;
+        try {
+            maxHistoryRecords = Integer.parseInt(maxHistoryField.getText().trim());
+        } catch (NumberFormatException ex) {
+            statusLabel.setText("Max history must be a positive integer.");
+            return;
+        }
+        if (maxHistoryRecords <= 0) {
+            statusLabel.setText("Max history must be a positive integer.");
+            return;
+        }
+        historyStore.setMaxRecordsPerEndpoint(maxHistoryRecords);
         final List<HitRule> hitRules;
         try {
             hitRules = HitRule.parse(keywordField.getText(), rulesArea.getText());
@@ -596,8 +890,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                                 }
                                 int variantIndex = ++attempted;
                                 publish(sendPayload(template, insertionPoint, category, payload,
-                                        encodingStrategy, hitRules, autoSendToRepeater,
-                                        repeaterCaptionPrefix, variantIndex));
+                                        encodingStrategy, hitRules, variantIndex));
                             }
                         }
                     }
@@ -607,18 +900,26 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
             @Override
             protected void process(List<RunnerResult> chunks) {
-                String repeaterError = "";
+                int droppedHistoryRecords = 0;
                 for (RunnerResult result : chunks) {
                     completed++;
                     resultModel.addResult(result);
-                    if (!result.getRepeaterError().isEmpty()) {
-                        repeaterError = result.getRepeaterError();
+                    HistoryStore.AppendResult appendResult =
+                            historyStore.append(result.getHistoryRecord());
+                    droppedHistoryRecords += appendResult.getDroppedCount();
+                    updateEndpointCombo();
+                    if (shouldShowNewRecord(result.getHistoryRecord())) {
+                        historyStore.select(result.getHistoryRecord());
+                        showHistoryRecord(result.getHistoryRecord());
+                    } else {
+                        updateHistoryHeader();
                     }
                 }
                 String status = "Running " + completed + " / " + totalRequests
                         + " payload request(s)...";
-                if (!repeaterError.isEmpty()) {
-                    status += " Last Repeater error: " + truncateStatus(repeaterError);
+                if (droppedHistoryRecords > 0) {
+                    status += " Dropped " + droppedHistoryRecords
+                            + " old history record(s) due to max history.";
                 }
                 statusLabel.setText(status);
             }
@@ -638,13 +939,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private RunnerResult sendPayload(RequestTemplate template, PayloadInsertionPoint insertionPoint,
             String category, String payload, EncodingStrategy encodingStrategy,
-            List<HitRule> hitRules, boolean autoSendToRepeater, String repeaterCaptionPrefix,
-            int variantIndex) {
+            List<HitRule> hitRules, int variantIndex) {
         byte[] request = insertionPoint.buildRequest(payload, encodingStrategy);
-        RepeaterSupport.SendResult repeaterResult = RepeaterSupport.maybeSend(callbacks,
-                template.getService(), request, template.getMethod(), template.getPath(),
-                category, insertionPoint.getName(), repeaterCaptionPrefix, variantIndex,
-                autoSendToRepeater);
         long started = System.nanoTime();
         byte[] response = null;
         int statusCode = -1;
@@ -671,9 +967,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             error = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
         }
         long elapsedMillis = Math.max(0L, (System.nanoTime() - started) / 1000000L);
-        return new RunnerResult(template, insertionPoint.getName(), category, payload, request,
-                response, statusCode, responseLength, elapsedMillis, hitMatch,
-                responseDiff.summary(), repeaterResult.isSent(), repeaterResult.getError(), error);
+        HistoryRecord historyRecord = new HistoryRecord(historyStore.nextId(), template,
+                insertionPoint.getName(), category, payload, request, response, statusCode,
+                responseLength, elapsedMillis, System.currentTimeMillis());
+        return new RunnerResult(template, historyRecord, hitMatch, responseDiff.summary(), error);
     }
 
     private List<RequestTemplate> snapshotRequests() {
@@ -715,8 +1012,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         runButton.setEnabled(!running);
         clearRequestsButton.setEnabled(!running);
         exportButton.setEnabled(!running);
-        autoSendRepeaterCheckBox.setEnabled(!running);
-        repeaterCaptionField.setEnabled(!running);
+        maxHistoryField.setEnabled(!running);
         encodingCombo.setEnabled(!running);
         keywordField.setEnabled(!running);
         rulesArea.setEnabled(!running);
@@ -795,29 +1091,29 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private void showSelectedResult() {
         int viewRow = resultTable.getSelectedRow();
         if (viewRow < 0) {
-            selectedResult = null;
-            requestViewer.setMessage(null, true);
-            responseViewer.setMessage(null, false);
+            showHistoryRecord(null);
             return;
         }
         int modelRow = resultTable.convertRowIndexToModel(viewRow);
-        selectedResult = resultModel.getResult(modelRow);
-        requestViewer.setMessage(selectedResult.getRequest(), true);
-        responseViewer.setMessage(selectedResult.getResponse(), false);
+        showHistoryRecord(resultModel.getResult(modelRow).getHistoryRecord());
     }
 
     @Override
     public IHttpService getHttpService() {
-        return selectedResult == null ? null : selectedResult.getTemplate().getService();
+        if (currentHistoryRecord == null) {
+            return null;
+        }
+        return helpers.buildHttpService(currentHistoryRecord.getHost(), currentHistoryRecord.getPort(),
+                currentHistoryRecord.isUseHttps() ? "https" : "http");
     }
 
     @Override
     public byte[] getRequest() {
-        return selectedResult == null ? null : selectedResult.getRequest();
+        return currentHistoryRecord == null ? null : currentHistoryRecord.getRequestBytes();
     }
 
     @Override
     public byte[] getResponse() {
-        return selectedResult == null ? null : selectedResult.getResponse();
+        return currentHistoryRecord == null ? null : currentHistoryRecord.getResponseBytes();
     }
 }

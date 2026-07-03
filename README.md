@@ -30,6 +30,8 @@ parameters whose values contain `*`.
 - Internal Request History grouped by endpoint
 - Manual Repeater sending for current, selected, or interesting history records
 - Optional Repeater tab caption prefix for manual sends
+- Result filters for text, hits, interesting records, and status classes
+- Built-in hit rule templates
 - Hit rules:
   - `keyword:admin`
   - `regex:uid=\d+`
@@ -40,7 +42,8 @@ parameters whose values contain `*`.
 - Response diff against the original Burp message response
 - Results table with endpoint, Repeater send status, interesting flag, hit, diff, status code, response length, and elapsed time
 - Click a result row to open its generated request and response in the History Viewer
-- Export results to CSV
+- Export all, selected, or interesting results to CSV
+- Export selected request/response message files
 - Built-in payload YAML extracted from `测试payload速取.xlsx`
 
 ## Build
@@ -64,8 +67,9 @@ so Burp's own API classes are used at runtime.
 sh scripts/test.sh
 ```
 
-The smoke test covers YAML parsing, marker replacement, history navigation,
-manual Repeater sending, result selection, CSV export, and queue actions.
+The smoke test covers YAML parsing, marker replacement, rate presets, history
+navigation, manual Repeater sending, result filtering, settings persistence,
+CSV export, and queue actions.
 
 ## Refresh Built-in Payloads
 
@@ -105,10 +109,13 @@ each category become payload entries in the built-in YAML.
      `Medium` 每包间隔约 250ms，`High` 不增加额外等待。
    - `Max history`：每个 endpoint 最多保留多少条完整请求/响应历史，默认 500；
      超过后释放最旧记录的请求/响应 bytes，结果表元数据仍保留。
-   - `Keywords` / `Hit rules`：设置响应命中规则。
+   - `Keywords` / `Hit rules`：设置响应命中规则，也可以选择模板后点击
+     `Apply Template` 快速填入常见规则。
 4. 点击 `Run Selected` 开始运行。
+   - 运行前会按分类对 payload 去重，状态栏会显示 unique payload 数和跳过的重复数量。
 5. 在 `Results` 页面查看状态码、长度、耗时、命中规则、diff、Interesting 和
    Sent to Repeater。点击任意结果行会在 `Request History` 中定位到该变体。
+   - `Filter`、`Hits`、`Interesting` 和状态码下拉框可以缩小结果表范围。
 6. 在 `Request History` 中按 endpoint 浏览记录：
    - `Previous` / `Next` 在当前 endpoint 内前进后退。
    - `Follow latest` 默认开启，新结果会自动跳到最新记录；关闭后不会打断当前查看位置。
@@ -119,7 +126,9 @@ each category become payload entries in the built-in YAML.
    - `Send current to Repeater`：发送当前 History 记录。
    - `Send selected rows to Repeater`：发送结果表中选中的记录。
    - `Send interesting to Repeater`：发送所有已标记 Interesting 的记录。
-8. 运行中可以 `Pause` / `Resume` / `Stop`。需要保存结果时点击 `Export CSV`。
+8. 运行中可以 `Pause` / `Resume` / `Stop`。需要保存结果时选择导出范围
+   `All` / `Selected` / `Interesting`，再点击 `Export CSV`；需要保存原始包时点击
+   `Export Messages`。
 
 ## YAML Format
 
@@ -141,8 +150,10 @@ ids: ["1", "2", "999999"]
 
 ## Runtime Notes
 
-Payload edits are saved through Burp extension settings. `Reset Built-in`
-restores the bundled `payloads.yaml` generated from `测试payload速取.xlsx`.
+Payload edits and UI settings are saved through Burp extension settings.
+`Reset Built-in` restores the bundled `payloads.yaml` generated from
+`测试payload速取.xlsx`. Persisted UI settings include encoding, rate, max history,
+Repeater prefix, and Follow latest.
 
 Keyword matching accepts comma, semicolon, or newline separated terms and writes
 matched terms into the result table's `Hit` column. Hit rules are editable in
@@ -163,9 +174,9 @@ receives records when you click one of the manual send buttons.
 History endpoint grouping uses `METHOD + scheme + host + port + path`; query
 parameters are intentionally excluded so variants of the same interface stay in
 one list. Manual Repeater tab captions use the optional `Repeater prefix` plus
-the history index, or only the index when the prefix is empty. Captions are
-capped at 80 characters. Repeater send failures are logged through Burp
-extension stderr and do not stop the payload run.
+the per-click send batch index, or only the index when the prefix is empty.
+Captions are capped at 80 characters. Repeater send failures are logged through
+Burp extension stderr and do not stop the payload run.
 
 When an endpoint exceeds `Max history`, old result rows stay in the table for
 status review and CSV export, but their full request/response bytes are dropped

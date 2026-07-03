@@ -17,6 +17,7 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -35,6 +36,7 @@ import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.RowFilter;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
@@ -45,11 +47,19 @@ import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.table.TableColumnModel;
+import javax.swing.table.TableRowSorter;
 
 final class PayloadRunnerPanel extends JPanel implements IMessageEditorController {
     private static final String PAYLOADS_SETTING = "payloadsYaml";
     private static final String RULES_SETTING = "hitRules";
+    private static final String ENCODING_SETTING = "encodingStrategy";
+    private static final String RATE_SETTING = "rateLimit";
+    private static final String MAX_HISTORY_SETTING = "maxHistory";
+    private static final String REPEATER_PREFIX_SETTING = "repeaterPrefix";
+    private static final String FOLLOW_LATEST_SETTING = "followLatest";
     private static final String DEFAULT_YAML = DefaultPayloads.load();
     private static final String DEFAULT_RULES =
             "# One rule per line: keyword:admin, regex:uid=\\d+, status:5xx,\n"
@@ -65,6 +75,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JTextArea rulesArea = new JTextArea(DEFAULT_RULES, 5, 24);
     private final ResultTableModel resultModel = new ResultTableModel();
     private final JTable resultTable = new JTable(resultModel);
+    private final TableRowSorter<ResultTableModel> resultSorter =
+            new TableRowSorter<ResultTableModel>(resultModel);
     private final JLabel statusLabel = new JLabel("Right-click a request and choose Send to Payload Runner.");
     private final JButton parseButton = new JButton("Parse YAML");
     private final JButton savePayloadsButton = new JButton("Save Payloads");
@@ -75,8 +87,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JButton clearRequestsButton = new JButton("Clear Requests");
     private final JButton clearResultsButton = new JButton("Clear Results");
     private final JButton exportButton = new JButton("Export CSV");
+    private final JButton exportMessagesButton = new JButton("Export Messages");
     private final JButton saveRulesButton = new JButton("Save Rules");
     private final JButton resetRulesButton = new JButton("Reset Rules");
+    private final JButton applyRuleTemplateButton = new JButton("Apply Template");
     private final JButton selectAllCategoriesButton = new JButton("All");
     private final JButton clearCategoriesButton = new JButton("None");
     private final JButton previousHistoryButton = new JButton("Previous");
@@ -94,6 +108,16 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JTextField maxHistoryField = new JTextField("500", 4);
     private final JTextField repeaterCaptionPrefixField = new JTextField(10);
     private final JTextField keywordField = new JTextField(24);
+    private final JTextField resultFilterField = new JTextField(16);
+    private final JCheckBox filterHitsCheckBox = new JCheckBox("Hits");
+    private final JCheckBox filterInterestingCheckBox = new JCheckBox("Interesting");
+    private final JComboBox<String> statusFilterCombo = new JComboBox<String>(
+            new String[] {"All statuses", "Errors", "2xx", "3xx", "4xx", "5xx"});
+    private final JComboBox<String> exportScopeCombo = new JComboBox<String>(
+            new String[] {"All", "Selected", "Interesting"});
+    private final JComboBox<HitRuleTemplate> hitRuleTemplateCombo =
+            new JComboBox<HitRuleTemplate>(HitRuleTemplate.values());
+    private final JLabel resultSummaryLabel = new JLabel("Results: 0");
     private final JLabel historyPositionLabel = new JLabel("#000 / 0");
     private final JLabel historyCategoryLabel = new JLabel("Category: -");
     private final JLabel historyParamLabel = new JLabel("Param: -");
@@ -120,6 +144,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         loadSavedPayloads();
         loadSavedRules();
         buildUi();
+        loadUiSettings();
         wireActions();
         parseYamlIntoCategories(false);
     }
@@ -218,6 +243,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         rulesPanel.setBorder(BorderFactory.createTitledBorder("Hit rules"));
         rulesPanel.add(new JScrollPane(rulesArea), BorderLayout.CENTER);
         JPanel rulesButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        rulesButtonPanel.add(hitRuleTemplateCombo);
+        rulesButtonPanel.add(applyRuleTemplateButton);
         rulesButtonPanel.add(saveRulesButton);
         rulesButtonPanel.add(resetRulesButton);
         rulesPanel.add(rulesButtonPanel, BorderLayout.SOUTH);
@@ -266,7 +293,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         runnerPage.add(runnerControlPanel, BorderLayout.SOUTH);
 
         resultTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
-        resultTable.setAutoCreateRowSorter(true);
+        resultTable.setAutoCreateRowSorter(false);
+        resultTable.setRowSorter(resultSorter);
         configureResultColumns(resultTable.getColumnModel());
         JPanel resultPanel = new JPanel(new BorderLayout(4, 4));
         resultPanel.setBorder(BorderFactory.createTitledBorder("Results"));
@@ -313,10 +341,24 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resultControlPanel.add(sendSelectedRepeaterButton);
         resultControlPanel.add(sendInterestingRepeaterButton);
         resultControlPanel.add(clearResultsButton);
+        resultControlPanel.add(exportScopeCombo);
         resultControlPanel.add(exportButton);
+        resultControlPanel.add(exportMessagesButton);
+
+        JPanel resultFilterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        resultFilterPanel.add(new JLabel("Filter"));
+        resultFilterPanel.add(resultFilterField);
+        resultFilterPanel.add(filterHitsCheckBox);
+        resultFilterPanel.add(filterInterestingCheckBox);
+        resultFilterPanel.add(statusFilterCombo);
+        resultFilterPanel.add(resultSummaryLabel);
+
+        JPanel resultTopPanel = new JPanel(new BorderLayout(0, 4));
+        resultTopPanel.add(resultControlPanel, BorderLayout.NORTH);
+        resultTopPanel.add(resultFilterPanel, BorderLayout.SOUTH);
 
         JPanel resultsPage = new JPanel(new BorderLayout(6, 6));
-        resultsPage.add(resultControlPanel, BorderLayout.NORTH);
+        resultsPage.add(resultTopPanel, BorderLayout.NORTH);
         resultsPage.add(lowerSplit, BorderLayout.CENTER);
 
         mainTabs = new JTabbedPane();
@@ -350,6 +392,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         parseButton.addActionListener(event -> parseYamlIntoCategories(true));
         savePayloadsButton.addActionListener(event -> savePayloads());
         resetPayloadsButton.addActionListener(event -> resetPayloads());
+        applyRuleTemplateButton.addActionListener(event -> applyRuleTemplate());
         saveRulesButton.addActionListener(event -> saveRules());
         resetRulesButton.addActionListener(event -> resetRules());
         selectAllCategoriesButton.addActionListener(event -> selectAllCategories());
@@ -363,10 +406,15 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 showEndpointCurrentRecord((String) endpointCombo.getSelectedItem());
             }
         });
+        followLatestCheckBox.addActionListener(event -> saveUiSettings());
         markInterestingButton.addActionListener(event -> toggleInteresting());
         sendCurrentRepeaterButton.addActionListener(event -> sendCurrentToRepeater());
         sendSelectedRepeaterButton.addActionListener(event -> sendSelectedRowsToRepeater());
         sendInterestingRepeaterButton.addActionListener(event -> sendInterestingToRepeater());
+        addResultFilterListener();
+        filterHitsCheckBox.addActionListener(event -> applyResultFilters());
+        filterInterestingCheckBox.addActionListener(event -> applyResultFilters());
+        statusFilterCombo.addActionListener(event -> applyResultFilters());
         stopButton.addActionListener(event -> {
             if (activeWorker != null) {
                 resumeIfPaused();
@@ -388,9 +436,11 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             currentHistoryRecord = null;
             clearEndpointCombo();
             showHistoryRecord(null);
+            updateResultSummary();
             statusLabel.setText("Results cleared.");
         });
         exportButton.addActionListener(event -> exportResults());
+        exportMessagesButton.addActionListener(event -> exportMessages());
         resultTable.getSelectionModel().addListSelectionListener(event -> {
             if (!event.getValueIsAdjusting()) {
                 showSelectedResult();
@@ -618,6 +668,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         currentHistoryRecord.setInteresting(!currentHistoryRecord.isInteresting());
         resultModel.fireRecordUpdated(currentHistoryRecord);
         updateHistoryHeader();
+        applyResultFilters();
         statusLabel.setText(currentHistoryRecord.isInteresting()
                 ? "Marked current history record interesting."
                 : "Unmarked current history record.");
@@ -672,11 +723,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     }
 
     private void sendRecordsToRepeater(List<HistoryRecord> records, String label) {
+        saveUiSettings();
         int sent = 0;
         String error = "";
+        int batchIndex = 1;
         for (HistoryRecord record : records) {
             RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record,
-                    displayIndex(record), repeaterCaptionPrefixField.getText());
+                    batchIndex++, repeaterCaptionPrefixField.getText());
             if (result.isSent()) {
                 sent++;
                 resultModel.fireRecordUpdated(record);
@@ -691,17 +744,106 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     + " to Repeater. Last error: " + truncateStatus(error));
         }
         updateHistoryHeader();
+        updateResultSummary();
     }
 
-    private int displayIndex(HistoryRecord record) {
-        int index = historyStore.indexOf(record);
-        if (index >= 0) {
-            return index + 1;
+    private void addResultFilterListener() {
+        resultFilterField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(DocumentEvent event) {
+                applyResultFilters();
+            }
+
+            @Override
+            public void removeUpdate(DocumentEvent event) {
+                applyResultFilters();
+            }
+
+            @Override
+            public void changedUpdate(DocumentEvent event) {
+                applyResultFilters();
+            }
+        });
+    }
+
+    private void applyResultFilters() {
+        final String text = resultFilterField.getText() == null
+                ? ""
+                : resultFilterField.getText().trim().toLowerCase();
+        final boolean onlyHits = filterHitsCheckBox.isSelected();
+        final boolean onlyInteresting = filterInterestingCheckBox.isSelected();
+        final String statusFilter = statusFilterCombo.getSelectedItem() == null
+                ? "All statuses"
+                : statusFilterCombo.getSelectedItem().toString();
+
+        resultSorter.setRowFilter(new RowFilter<ResultTableModel, Integer>() {
+            @Override
+            public boolean include(RowFilter.Entry<? extends ResultTableModel, ? extends Integer> entry) {
+                RunnerResult result = entry.getModel().getResult(entry.getIdentifier().intValue());
+                HistoryRecord record = result.getHistoryRecord();
+                if (onlyHits && result.getHitMatch().trim().isEmpty()) {
+                    return false;
+                }
+                if (onlyInteresting && !record.isInteresting()) {
+                    return false;
+                }
+                if (!matchesStatusFilter(result, statusFilter)) {
+                    return false;
+                }
+                return matchesResultText(result, text);
+            }
+        });
+        updateResultSummary();
+    }
+
+    private boolean matchesStatusFilter(RunnerResult result, String statusFilter) {
+        if ("All statuses".equals(statusFilter)) {
+            return true;
         }
-        if (record.getResultRowId() >= 0) {
-            return record.getResultRowId() + 1;
+        if ("Errors".equals(statusFilter)) {
+            return result.getError() != null || result.getStatusCode() < 0;
         }
-        return 1;
+        int statusCode = result.getStatusCode();
+        if (statusCode < 0 || statusFilter.length() < 1) {
+            return false;
+        }
+        char expectedHundreds = statusFilter.charAt(0);
+        return Character.isDigit(expectedHundreds)
+                && statusCode / 100 == Character.digit(expectedHundreds, 10);
+    }
+
+    private boolean matchesResultText(RunnerResult result, String text) {
+        if (text.isEmpty()) {
+            return true;
+        }
+        HistoryRecord record = result.getHistoryRecord();
+        String haystack = (record.getEndpointKey() + " " + result.getParameterName() + " "
+                + result.getCategory() + " " + result.getPayload() + " "
+                + result.getHitMatch() + " " + result.getDiffSummary() + " "
+                + result.getStatusCode()).toLowerCase();
+        return haystack.contains(text);
+    }
+
+    private void updateResultSummary() {
+        int total = resultModel.getRowCount();
+        int visible = resultTable.getRowCount();
+        int hits = 0;
+        int interesting = 0;
+        int errors = 0;
+        for (RunnerResult result : resultModel.snapshot()) {
+            if (!result.getHitMatch().trim().isEmpty()) {
+                hits++;
+            }
+            if (result.getHistoryRecord().isInteresting()) {
+                interesting++;
+            }
+            if (result.getError() != null || result.getStatusCode() < 0) {
+                errors++;
+            }
+        }
+        resultSummaryLabel.setText("Results: " + visible + " / " + total
+                + " visible, hits " + hits + ", interesting " + interesting
+                + ", errors " + errors);
     }
 
     private boolean parseYamlIntoCategories(boolean showDialogOnError) {
@@ -780,6 +922,54 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
     }
 
+    private void loadUiSettings() {
+        String savedEncoding = callbacks.loadExtensionSetting(ENCODING_SETTING);
+        if (savedEncoding != null) {
+            try {
+                encodingCombo.setSelectedItem(EncodingStrategy.valueOf(savedEncoding));
+            } catch (IllegalArgumentException ignored) {
+                // Ignore settings saved by a newer or edited build.
+            }
+        }
+
+        String savedRate = callbacks.loadExtensionSetting(RATE_SETTING);
+        if (savedRate != null) {
+            try {
+                rateLimitCombo.setSelectedItem(RateLimit.valueOf(savedRate));
+            } catch (IllegalArgumentException ignored) {
+                // Ignore settings saved by a newer or edited build.
+            }
+        }
+
+        String savedMaxHistory = callbacks.loadExtensionSetting(MAX_HISTORY_SETTING);
+        if (savedMaxHistory != null && !savedMaxHistory.trim().isEmpty()) {
+            maxHistoryField.setText(savedMaxHistory.trim());
+        }
+
+        String savedRepeaterPrefix = callbacks.loadExtensionSetting(REPEATER_PREFIX_SETTING);
+        if (savedRepeaterPrefix != null) {
+            repeaterCaptionPrefixField.setText(savedRepeaterPrefix);
+        }
+
+        String savedFollowLatest = callbacks.loadExtensionSetting(FOLLOW_LATEST_SETTING);
+        if (savedFollowLatest != null && !savedFollowLatest.trim().isEmpty()) {
+            followLatestCheckBox.setSelected(Boolean.parseBoolean(savedFollowLatest));
+        }
+    }
+
+    private void saveUiSettings() {
+        EncodingStrategy encodingStrategy = (EncodingStrategy) encodingCombo.getSelectedItem();
+        RateLimit rateLimit = (RateLimit) rateLimitCombo.getSelectedItem();
+        callbacks.saveExtensionSetting(ENCODING_SETTING,
+                encodingStrategy == null ? EncodingStrategy.URL_ENCODE.name() : encodingStrategy.name());
+        callbacks.saveExtensionSetting(RATE_SETTING,
+                rateLimit == null ? RateLimit.MEDIUM.name() : rateLimit.name());
+        callbacks.saveExtensionSetting(MAX_HISTORY_SETTING, maxHistoryField.getText().trim());
+        callbacks.saveExtensionSetting(REPEATER_PREFIX_SETTING, repeaterCaptionPrefixField.getText());
+        callbacks.saveExtensionSetting(FOLLOW_LATEST_SETTING,
+                Boolean.toString(followLatestCheckBox.isSelected()));
+    }
+
     private void savePayloads() {
         if (!parseYamlIntoCategories(true)) {
             return;
@@ -806,6 +996,15 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
         callbacks.saveExtensionSetting(RULES_SETTING, rulesArea.getText());
         statusLabel.setText("Hit rules saved to Burp extension settings.");
+    }
+
+    private void applyRuleTemplate() {
+        HitRuleTemplate template = (HitRuleTemplate) hitRuleTemplateCombo.getSelectedItem();
+        if (template == null) {
+            return;
+        }
+        rulesArea.setText(template.getRules());
+        statusLabel.setText("Applied hit rule template: " + template + ".");
     }
 
     private void resetRules() {
@@ -851,6 +1050,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             return;
         }
         historyStore.setMaxRecordsPerEndpoint(maxHistoryRecords);
+        saveUiSettings();
         final List<HitRule> hitRules;
         try {
             hitRules = HitRule.parse(keywordField.getText(), rulesArea.getText());
@@ -860,11 +1060,19 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             return;
         }
         int total = 0;
+        int markerCount = countInsertionPoints(requests);
+        int uniquePayloadCount = 0;
+        int duplicatePayloadCount = 0;
         for (String category : categories) {
             List<String> payloads = parsedPayloads.get(category);
             if (payloads != null && !payloads.isEmpty()) {
-                selectedPayloads.put(category, new ArrayList<String>(payloads));
-                total += countInsertionPoints(requests) * payloads.size();
+                List<String> uniquePayloads = uniquePayloads(payloads);
+                if (!uniquePayloads.isEmpty()) {
+                    selectedPayloads.put(category, uniquePayloads);
+                    uniquePayloadCount += uniquePayloads.size();
+                    duplicatePayloadCount += payloads.size() - uniquePayloads.size();
+                    total += markerCount * uniquePayloads.size();
+                }
             }
         }
         if (total == 0) {
@@ -872,11 +1080,17 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             return;
         }
         final int totalRequests = total;
+        final int duplicatePayloadsSkipped = duplicatePayloadCount;
+        final String planSummary = categories.size() + " categor"
+                + (categories.size() == 1 ? "y" : "ies") + ", "
+                + uniquePayloadCount + " unique payload(s), "
+                + markerCount + " marker(s)";
 
         setRunning(true);
         paused = false;
         statusLabel.setText("Running 0 / " + totalRequests + " payload request(s) at "
-                + rateLimit + " rate...");
+                + rateLimit + " rate (" + planSummary + duplicateSummary(duplicatePayloadsSkipped)
+                + ")...");
         if (mainTabs != null) {
             mainTabs.setSelectedIndex(1);
         }
@@ -932,8 +1146,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                         updateHistoryHeader();
                     }
                 }
+                updateResultSummary();
                 String status = "Running " + completed + " / " + totalRequests
-                        + " payload request(s) at " + rateLimit + " rate...";
+                        + " payload request(s) at " + rateLimit + " rate (" + planSummary
+                        + duplicateSummary(duplicatePayloadsSkipped) + ")...";
                 if (droppedHistoryRecords > 0) {
                     status += " Dropped " + droppedHistoryRecords
                             + " old history record(s) due to max history.";
@@ -1010,6 +1226,23 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         return activeWorker != null && !activeWorker.isDone();
     }
 
+    private List<String> uniquePayloads(List<String> payloads) {
+        Map<String, Boolean> seen = new LinkedHashMap<String, Boolean>();
+        for (String payload : payloads) {
+            if (!seen.containsKey(payload)) {
+                seen.put(payload, Boolean.TRUE);
+            }
+        }
+        return new ArrayList<String>(seen.keySet());
+    }
+
+    private String duplicateSummary(int duplicatePayloadsSkipped) {
+        if (duplicatePayloadsSkipped <= 0) {
+            return "";
+        }
+        return ", skipped " + duplicatePayloadsSkipped + " duplicate payload(s)";
+    }
+
     private int countInsertionPoints(List<RequestTemplate> requests) {
         int count = 0;
         for (RequestTemplate request : requests) {
@@ -1022,6 +1255,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         parseButton.setEnabled(!running);
         savePayloadsButton.setEnabled(!running);
         resetPayloadsButton.setEnabled(!running);
+        applyRuleTemplateButton.setEnabled(!running);
+        hitRuleTemplateCombo.setEnabled(!running);
         saveRulesButton.setEnabled(!running);
         resetRulesButton.setEnabled(!running);
         selectAllCategoriesButton.setEnabled(!running);
@@ -1029,6 +1264,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         runButton.setEnabled(!running);
         clearRequestsButton.setEnabled(!running);
         exportButton.setEnabled(!running);
+        exportMessagesButton.setEnabled(!running);
+        exportScopeCombo.setEnabled(!running);
         maxHistoryField.setEnabled(!running);
         encodingCombo.setEnabled(!running);
         rateLimitCombo.setEnabled(!running);
@@ -1100,9 +1337,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     }
 
     private void exportResults() {
-        List<RunnerResult> results = resultModel.snapshot();
+        List<RunnerResult> results = resultsForExportScope();
         if (results.isEmpty()) {
-            statusLabel.setText("No results to export.");
+            statusLabel.setText("No " + exportScopeLabel() + " result(s) to export.");
             return;
         }
         JFileChooser chooser = new JFileChooser();
@@ -1113,12 +1350,111 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
         try {
             CsvExporter.export(chooser.getSelectedFile(), results);
-            statusLabel.setText("Exported " + results.size() + " result(s) to "
+            statusLabel.setText("Exported " + results.size() + " " + exportScopeLabel()
+                    + " result(s) to "
                     + chooser.getSelectedFile().getAbsolutePath());
         } catch (IOException ex) {
             JOptionPane.showMessageDialog(this, ex.getMessage(), "Export error",
                     JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    private void exportMessages() {
+        List<RunnerResult> results = resultsForExportScope();
+        if (results.isEmpty()) {
+            statusLabel.setText("No " + exportScopeLabel() + " result(s) to export.");
+            return;
+        }
+        JFileChooser chooser = new JFileChooser();
+        chooser.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+        int choice = chooser.showSaveDialog(this);
+        if (choice != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+
+        int written = 0;
+        int skipped = 0;
+        File directory = chooser.getSelectedFile();
+        for (int i = 0; i < results.size(); i++) {
+            HistoryRecord record = results.get(i).getHistoryRecord();
+            String baseName = messageExportBaseName(i + 1, record);
+            try {
+                if (record.getRequestBytes() != null) {
+                    writeBytes(new File(directory, baseName + "-request.http"),
+                            record.getRequestBytes());
+                    written++;
+                } else {
+                    skipped++;
+                }
+                if (record.getResponseBytes() != null) {
+                    writeBytes(new File(directory, baseName + "-response.http"),
+                            record.getResponseBytes());
+                    written++;
+                }
+            } catch (IOException ex) {
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "Export error",
+                        JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+        }
+        statusLabel.setText("Exported " + written + " message file(s) to "
+                + directory.getAbsolutePath() + (skipped > 0
+                ? "; skipped " + skipped + " dropped request(s)."
+                : "."));
+    }
+
+    private List<RunnerResult> resultsForExportScope() {
+        String scope = exportScopeCombo.getSelectedItem() == null
+                ? "All"
+                : exportScopeCombo.getSelectedItem().toString();
+        if ("Selected".equals(scope)) {
+            return selectedResults();
+        }
+        if ("Interesting".equals(scope)) {
+            List<RunnerResult> results = new ArrayList<RunnerResult>();
+            for (RunnerResult result : resultModel.snapshot()) {
+                if (result.getHistoryRecord().isInteresting()) {
+                    results.add(result);
+                }
+            }
+            return results;
+        }
+        return resultModel.snapshot();
+    }
+
+    private List<RunnerResult> selectedResults() {
+        List<RunnerResult> results = new ArrayList<RunnerResult>();
+        int[] rows = resultTable.getSelectedRows();
+        for (int row : rows) {
+            results.add(resultModel.getResult(resultTable.convertRowIndexToModel(row)));
+        }
+        return results;
+    }
+
+    private String exportScopeLabel() {
+        return exportScopeCombo.getSelectedItem() == null
+                ? "all"
+                : exportScopeCombo.getSelectedItem().toString().toLowerCase();
+    }
+
+    private void writeBytes(File file, byte[] data) throws IOException {
+        try (FileOutputStream output = new FileOutputStream(file)) {
+            output.write(data);
+        }
+    }
+
+    private String messageExportBaseName(int index, HistoryRecord record) {
+        String label = index + "-" + record.getMethod() + "-" + record.getEndpointPath()
+                + "-" + record.getCategory() + "-" + record.getParameterName();
+        return sanitizeFileName(label);
+    }
+
+    private String sanitizeFileName(String value) {
+        String sanitized = value.replaceAll("[^A-Za-z0-9._-]+", "_");
+        if (sanitized.length() > 96) {
+            return sanitized.substring(0, 96);
+        }
+        return sanitized.isEmpty() ? "payload-runner-message" : sanitized;
     }
 
     private String truncateStatus(String value) {

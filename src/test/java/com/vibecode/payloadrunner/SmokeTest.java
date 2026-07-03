@@ -31,12 +31,15 @@ import java.util.List;
 import java.util.Map;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.JTable;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 
 public final class SmokeTest {
@@ -61,6 +64,9 @@ public final class SmokeTest {
         testEndpointKeyExcludesQuery();
         testResultRowSelectsHistoryRecord();
         testManualRepeaterButtons();
+        testResultFiltersAndSummary();
+        testUiSettingsPersistenceAndPayloadDedupe();
+        testHitRuleTemplate();
         testCsvExport();
         testContextMenuCapturesSelectionSnapshot();
         testCategorySelectionDoesNotExpandOnParse();
@@ -503,6 +509,166 @@ public final class SmokeTest {
                 second.setInteresting(true);
                 sendInteresting.doClick();
                 assertEquals(4, callbacks.repeaterSendCount, "interesting repeater send count");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testResultFiltersAndSummary() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                        FakeMessage.queryWithMarker());
+                ResultTableModel resultModel = (ResultTableModel) privateField(panel, "resultModel");
+                JTable resultTable = (JTable) privateField(panel, "resultTable");
+                JCheckBox filterHitsCheckBox =
+                        (JCheckBox) privateField(panel, "filterHitsCheckBox");
+                JCheckBox filterInterestingCheckBox =
+                        (JCheckBox) privateField(panel, "filterInterestingCheckBox");
+                @SuppressWarnings("unchecked")
+                JComboBox<String> statusFilterCombo =
+                        (JComboBox<String>) privateField(panel, "statusFilterCombo");
+                JTextField resultFilterField =
+                        (JTextField) privateField(panel, "resultFilterField");
+                JLabel resultSummaryLabel =
+                        (JLabel) privateField(panel, "resultSummaryLabel");
+                @SuppressWarnings("unchecked")
+                JComboBox<String> exportScopeCombo =
+                        (JComboBox<String>) privateField(panel, "exportScopeCombo");
+
+                RunnerResult plain = new RunnerResult(template, "url:id", "ids", "aaa",
+                        callbacks.helpers.stringToBytes("GET /plain HTTP/1.1\r\n\r\n"),
+                        callbacks.helpers.stringToBytes("HTTP/1.1 200 OK\r\n\r\nplain"),
+                        200, 19, 1L, "", "", false, "", null);
+                RunnerResult hit = new RunnerResult(template, "url:id", "xss", "bbb",
+                        callbacks.helpers.stringToBytes("GET /hit HTTP/1.1\r\n\r\n"),
+                        callbacks.helpers.stringToBytes("HTTP/1.1 500 Error\r\n\r\nhit"),
+                        500, 22, 2L, "keyword:hit", "diff>0", false, "", null);
+                plain.getHistoryRecord().setInteresting(true);
+                resultModel.addResult(plain);
+                resultModel.addResult(hit);
+
+                invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
+                assertEquals(2, resultTable.getRowCount(), "unfiltered result row count");
+                assertContains(resultSummaryLabel.getText(), "2 / 2 visible", "summary visible count");
+
+                filterHitsCheckBox.setSelected(true);
+                invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
+                assertEquals(1, resultTable.getRowCount(), "hit filter row count");
+
+                filterHitsCheckBox.setSelected(false);
+                filterInterestingCheckBox.setSelected(true);
+                invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
+                assertEquals(1, resultTable.getRowCount(), "interesting filter row count");
+
+                filterInterestingCheckBox.setSelected(false);
+                statusFilterCombo.setSelectedItem("5xx");
+                invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
+                assertEquals(1, resultTable.getRowCount(), "status filter row count");
+
+                statusFilterCombo.setSelectedItem("All statuses");
+                resultFilterField.setText("xss");
+                invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
+                assertEquals(1, resultTable.getRowCount(), "text filter row count");
+
+                resultFilterField.setText("");
+                invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
+                resultTable.setRowSelectionInterval(1, 1);
+                exportScopeCombo.setSelectedItem("Selected");
+                @SuppressWarnings("unchecked")
+                List<RunnerResult> selectedResults = (List<RunnerResult>) invokePrivate(panel,
+                        "resultsForExportScope", new Class<?>[] {});
+                assertEquals(1, selectedResults.size(), "selected export scope count");
+                assertEquals(true, selectedResults.get(0) == hit, "selected export result");
+
+                exportScopeCombo.setSelectedItem("Interesting");
+                @SuppressWarnings("unchecked")
+                List<RunnerResult> interestingResults = (List<RunnerResult>) invokePrivate(panel,
+                        "resultsForExportScope", new Class<?>[] {});
+                assertEquals(1, interestingResults.size(), "interesting export scope count");
+                assertEquals(true, interestingResults.get(0) == plain, "interesting export result");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testUiSettingsPersistenceAndPayloadDedupe() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                @SuppressWarnings("unchecked")
+                JComboBox<EncodingStrategy> encodingCombo =
+                        (JComboBox<EncodingStrategy>) privateField(panel, "encodingCombo");
+                @SuppressWarnings("unchecked")
+                JComboBox<RateLimit> rateLimitCombo =
+                        (JComboBox<RateLimit>) privateField(panel, "rateLimitCombo");
+                JTextField maxHistoryField =
+                        (JTextField) privateField(panel, "maxHistoryField");
+                JTextField repeaterCaptionPrefixField =
+                        (JTextField) privateField(panel, "repeaterCaptionPrefixField");
+                JCheckBox followLatestCheckBox =
+                        (JCheckBox) privateField(panel, "followLatestCheckBox");
+
+                encodingCombo.setSelectedItem(EncodingStrategy.RAW);
+                rateLimitCombo.setSelectedItem(RateLimit.LOW);
+                maxHistoryField.setText("123");
+                repeaterCaptionPrefixField.setText("查询");
+                followLatestCheckBox.setSelected(false);
+                invokePrivate(panel, "saveUiSettings", new Class<?>[] {});
+
+                @SuppressWarnings("unchecked")
+                List<String> unique = (List<String>) invokePrivate(panel, "uniquePayloads",
+                        new Class<?>[] {List.class}, Arrays.asList("a", "b", "a"));
+                assertEquals(Arrays.asList("a", "b"), unique, "payload dedupe order");
+
+                PayloadRunnerPanel loaded = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                @SuppressWarnings("unchecked")
+                JComboBox<EncodingStrategy> loadedEncoding =
+                        (JComboBox<EncodingStrategy>) privateField(loaded, "encodingCombo");
+                @SuppressWarnings("unchecked")
+                JComboBox<RateLimit> loadedRate =
+                        (JComboBox<RateLimit>) privateField(loaded, "rateLimitCombo");
+                JTextField loadedMaxHistory =
+                        (JTextField) privateField(loaded, "maxHistoryField");
+                JTextField loadedPrefix =
+                        (JTextField) privateField(loaded, "repeaterCaptionPrefixField");
+                JCheckBox loadedFollowLatest =
+                        (JCheckBox) privateField(loaded, "followLatestCheckBox");
+
+                assertEquals(EncodingStrategy.RAW, loadedEncoding.getSelectedItem(),
+                        "loaded encoding setting");
+                assertEquals(RateLimit.LOW, loadedRate.getSelectedItem(),
+                        "loaded rate setting");
+                assertEquals("123", loadedMaxHistory.getText(), "loaded max history");
+                assertEquals("查询", loadedPrefix.getText(), "loaded repeater prefix");
+                assertEquals(false, loadedFollowLatest.isSelected(), "loaded follow latest");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testHitRuleTemplate() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                @SuppressWarnings("unchecked")
+                JComboBox<HitRuleTemplate> hitRuleTemplateCombo =
+                        (JComboBox<HitRuleTemplate>) privateField(panel, "hitRuleTemplateCombo");
+                JTextArea rulesArea = (JTextArea) privateField(panel, "rulesArea");
+                hitRuleTemplateCombo.setSelectedItem(HitRuleTemplate.SQLI);
+                invokePrivate(panel, "applyRuleTemplate", new Class<?>[] {});
+
+                assertContains(rulesArea.getText(), "SQL injection signals",
+                        "sqli template text");
+                assertEquals(true, HitRule.parse("", rulesArea.getText()).size() > 0,
+                        "sqli template parses");
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }

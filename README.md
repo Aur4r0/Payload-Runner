@@ -29,6 +29,7 @@ parameters whose values contain `*`.
 - Keyword matching against responses
 - Internal Request History grouped by endpoint
 - Manual Repeater sending for current, selected, or interesting history records
+- Optional Repeater tab caption prefix for manual sends
 - Hit rules:
   - `keyword:admin`
   - `regex:uid=\d+`
@@ -113,6 +114,8 @@ each category become payload entries in the built-in YAML.
    - `Follow latest` 默认开启，新结果会自动跳到最新记录；关闭后不会打断当前查看位置。
    - `Mark interesting` / `Unmark interesting` 手动标记值得复查的记录。
 7. 需要把包送到 Burp Repeater 时，使用手动按钮：
+   - `Repeater prefix`：可选命名前缀。填写 `查询` 时，tab 命名为
+     `查询1`, `查询2`, `查询3`；留空时命名为 `1`, `2`, `3`。
    - `Send current to Repeater`：发送当前 History 记录。
    - `Send selected rows to Repeater`：发送结果表中选中的记录。
    - `Send interesting to Repeater`：发送所有已标记 Interesting 的记录。
@@ -159,10 +162,10 @@ receives records when you click one of the manual send buttons.
 
 History endpoint grouping uses `METHOD + scheme + host + port + path`; query
 parameters are intentionally excluded so variants of the same interface stay in
-one list. Repeater tab captions use
-`METHOD PATH | CATEGORY | PARAM | #INDEX` and are capped at 80 characters.
-Repeater send failures are logged through Burp extension stderr and do not stop
-the payload run.
+one list. Manual Repeater tab captions use the optional `Repeater prefix` plus
+the history index, or only the index when the prefix is empty. Captions are
+capped at 80 characters. Repeater send failures are logged through Burp
+extension stderr and do not stop the payload run.
 
 When an endpoint exceeds `Max history`, old result rows stay in the table for
 status review and CSV export, but their full request/response bytes are dropped

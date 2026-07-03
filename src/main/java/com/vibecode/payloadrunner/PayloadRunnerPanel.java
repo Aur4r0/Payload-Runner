@@ -92,6 +92,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             new JComboBox<RateLimit>(RateLimit.values());
     private final JComboBox<String> endpointCombo = new JComboBox<String>();
     private final JTextField maxHistoryField = new JTextField("500", 4);
+    private final JTextField repeaterCaptionPrefixField = new JTextField(10);
     private final JTextField keywordField = new JTextField(24);
     private final JLabel historyPositionLabel = new JLabel("#000 / 0");
     private final JLabel historyCategoryLabel = new JLabel("Category: -");
@@ -306,6 +307,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resultControlPanel.add(pauseButton);
         resultControlPanel.add(stopButton);
         resultControlPanel.add(markInterestingButton);
+        resultControlPanel.add(new JLabel("Repeater prefix"));
+        resultControlPanel.add(repeaterCaptionPrefixField);
         resultControlPanel.add(sendCurrentRepeaterButton);
         resultControlPanel.add(sendSelectedRepeaterButton);
         resultControlPanel.add(sendInterestingRepeaterButton);
@@ -673,7 +676,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         String error = "";
         for (HistoryRecord record : records) {
             RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record,
-                    displayIndex(record));
+                    displayIndex(record), repeaterCaptionPrefixField.getText());
             if (result.isSent()) {
                 sent++;
                 resultModel.fireRecordUpdated(record);

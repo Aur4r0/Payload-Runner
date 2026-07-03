@@ -37,6 +37,7 @@ import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.JTable;
+import javax.swing.JTextField;
 
 public final class SmokeTest {
     public static void main(String[] args) throws Exception {
@@ -281,7 +282,6 @@ public final class SmokeTest {
 
     private static void testRepeaterCaptionAndSend() {
         FakeCallbacks callbacks = new FakeCallbacks();
-        FakeHttpService service = new FakeHttpService("example.test", 443, "https");
         byte[] request = callbacks.helpers.stringToBytes("POST /api HTTP/1.1\r\n\r\n");
 
         RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
@@ -295,15 +295,23 @@ public final class SmokeTest {
         assertEquals("example.test", callbacks.repeaterHost, "repeater host");
         assertEquals(80, callbacks.repeaterPort, "repeater port");
         assertEquals(false, callbacks.repeaterUseHttps, "repeater https");
-        assertEquals("POST /submit | sqli | url:id | #003", callbacks.repeaterCaption,
-                "manual repeater caption");
+        assertEquals("3", callbacks.repeaterCaption,
+                "blank prefix manual repeater caption");
 
-        String longCaption = RepeaterSupport.buildCaption("POST",
-                "/very/long/path/that/keeps/going/and/going/and/going/and/going",
-                "sqli", "username", 12);
+        RepeaterSupport.SendResult customResult = RepeaterSupport.sendRecord(callbacks, record,
+                4, "查询");
+        assertEquals(true, customResult.isSent(), "custom prefix repeater send success");
+        assertEquals("查询4", callbacks.repeaterCaption, "custom prefix repeater caption");
+
+        String longCaption = RepeaterSupport.buildCaption("POST", "/path",
+                "sqli", "username", 12,
+                "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz");
         assertEquals(true, longCaption.length() <= 80, "truncated repeater caption length");
-        assertContains(longCaption, "#012", "truncated repeater caption index");
-        assertContains(longCaption, "POST /very/long/path", "truncated repeater caption prefix");
+        assertContains(longCaption, "12", "truncated repeater caption index");
+
+        String blankCaption = RepeaterSupport.buildCaption("POST", "/path",
+                "sqli", "username", 12, "   ");
+        assertEquals("12", blankCaption, "blank prefix build caption");
     }
 
     private static void testRepeaterSendFailureDoesNotThrow() {
@@ -462,6 +470,8 @@ public final class SmokeTest {
                         (JButton) privateField(panel, "sendSelectedRepeaterButton");
                 JButton sendInteresting =
                         (JButton) privateField(panel, "sendInterestingRepeaterButton");
+                JTextField repeaterCaptionPrefixField =
+                        (JTextField) privateField(panel, "repeaterCaptionPrefixField");
 
                 HistoryRecord first = new HistoryRecord(historyStore.nextId(), template, "url:id",
                         "ids", "1", callbacks.helpers.stringToBytes("GET /1 HTTP/1.1\r\n\r\n"),
@@ -480,11 +490,14 @@ public final class SmokeTest {
                         new Class<?>[] {HistoryRecord.class}, first);
                 sendCurrent.doClick();
                 assertEquals(1, callbacks.repeaterSendCount, "current repeater send count");
+                assertEquals("1", callbacks.repeaterCaption, "current blank prefix caption");
                 assertEquals(true, first.isSentToRepeater(), "current record sent flag");
 
+                repeaterCaptionPrefixField.setText("查询");
                 resultTable.setRowSelectionInterval(0, 1);
                 sendSelected.doClick();
                 assertEquals(3, callbacks.repeaterSendCount, "selected repeater send count");
+                assertEquals("查询2", callbacks.repeaterCaption, "selected custom prefix caption");
                 assertEquals(true, second.isSentToRepeater(), "selected record sent flag");
 
                 second.setInteresting(true);

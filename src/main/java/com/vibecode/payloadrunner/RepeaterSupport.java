@@ -10,8 +10,13 @@ final class RepeaterSupport {
 
     static SendResult sendRecord(IBurpExtenderCallbacks callbacks, HistoryRecord record,
             int displayIndex) {
+        return sendRecord(callbacks, record, displayIndex, "");
+    }
+
+    static SendResult sendRecord(IBurpExtenderCallbacks callbacks, HistoryRecord record,
+            int displayIndex, String captionPrefix) {
         String caption = buildCaption(record.getMethod(), record.getEndpointPath(),
-                record.getCategory(), record.getParameterName(), displayIndex);
+                record.getCategory(), record.getParameterName(), displayIndex, captionPrefix);
         if (!record.hasRequestBytes()) {
             String message = "request bytes were dropped due to max history";
             logError(callbacks, "sendToRepeater failed: " + message);
@@ -39,50 +44,26 @@ final class RepeaterSupport {
 
     static String buildCaption(String method, String path, String category, String parameterName,
             int index) {
-        return buildDefaultCaption(method, path, category, parameterName, index);
+        return buildCaption(method, path, category, parameterName, index, "");
     }
 
-    private static String buildDefaultCaption(String method, String path, String category,
-            String parameterName, int index) {
-        String prefix = clean(nullToEmpty(method) + " " + nullToEmpty(path)).trim();
-        String safeCategory = clean(nullToEmpty(category));
-        String safeParameter = clean(nullToEmpty(parameterName));
-        String indexLabel = "#" + padIndex(index);
-
-        String full = prefix + " | " + safeCategory + " | " + safeParameter + " | " + indexLabel;
-        if (full.length() <= MAX_CAPTION_LENGTH) {
-            return full;
-        }
-
-        String suffix = " | " + safeCategory + " | " + indexLabel;
-        if (prefix.length() + suffix.length() <= MAX_CAPTION_LENGTH) {
-            return prefix + suffix;
-        }
-
-        int prefixMax = MAX_CAPTION_LENGTH - suffix.length();
-        if (prefixMax < 8) {
-            suffix = " | " + indexLabel;
-            prefixMax = MAX_CAPTION_LENGTH - suffix.length();
-        }
-        int keep = Math.max(1, prefixMax - 3);
-        String shortenedPrefix = prefix.length() <= keep ? prefix : prefix.substring(0, keep) + "...";
-        return shortenedPrefix + suffix;
+    static String buildCaption(String method, String path, String category, String parameterName,
+            int index, String captionPrefix) {
+        String customPrefix = clean(nullToEmpty(captionPrefix)).trim();
+        return buildPrefixCaption(customPrefix, index);
     }
 
-    private static String padIndex(int index) {
-        if (index < 0) {
-            index = 0;
+    private static String buildPrefixCaption(String prefix, int index) {
+        String indexLabel = Integer.toString(index < 0 ? 0 : index);
+        String caption = prefix + indexLabel;
+        if (caption.length() <= MAX_CAPTION_LENGTH) {
+            return caption;
         }
-        if (index < 1000) {
-            String value = Integer.toString(index);
-            StringBuilder padded = new StringBuilder();
-            for (int i = value.length(); i < 3; i++) {
-                padded.append('0');
-            }
-            padded.append(value);
-            return padded.toString();
+        int keep = MAX_CAPTION_LENGTH - indexLabel.length();
+        if (keep <= 3) {
+            return prefix.substring(0, Math.max(1, keep)) + indexLabel;
         }
-        return Integer.toString(index);
+        return prefix.substring(0, keep - 3) + "..." + indexLabel;
     }
 
     private static String clean(String value) {

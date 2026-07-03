@@ -2,28 +2,33 @@
 
 ## 项目结构
 
-- 当前仓库只有 Git 元数据，没有源码、配置文件、依赖清单、测试目录或构建产物。
-- 当前分支为 `main`，尚无提交；未配置 Git remote。
-- 新增项目文件后，优先按实际文件识别技术栈：
-  - `package.json`：以前端或 Node 项目规则为准。
-  - `pyproject.toml` / `requirements.txt`：以 Python 项目规则为准。
-  - `go.mod`：以 Go 项目规则为准。
-  - `Cargo.toml`：以 Rust 项目规则为准。
-- 新增目录时保持入口清晰：源码、测试、脚本、文档、配置不要混放。
+- 当前仓库是 Java Burp Suite 插件项目。
+- `src/main/java/com/vibecode/payloadrunner/`：插件源码。
+- `src/main/resources/payloads.yaml`：插件内置 payload 分类，来源于 `测试payload速取.xlsx`。
+- `src/compileOnly/java/burp/`：编译期 Burp legacy API stub，仅用于本地 `javac`，不要打进最终 jar。
+- `scripts/build.sh`：本地构建脚本。
+- `scripts/extract_payloads.py`：从 `测试payload速取.xlsx` 提取 payload 并生成内置 YAML。
+- 插件运行时 payload 和命中规则编辑内容通过 Burp extension settings 保存，不直接回写 jar 内资源。
+- `build/`：本地构建输出，已忽略，不提交。
 
 ## 运行命令
 
-- 当前没有可用运行命令。
-- 不要臆造 `npm run dev`、`python app.py`、`go run` 等命令。
-- 若后续出现依赖清单或脚本配置，先读取对应文件，再使用其中定义的命令。
-- 引入新的运行命令时，必须同时更新本文件。
+- 构建插件 jar：
+  - `sh scripts/build.sh`
+- 构建产物：
+  - `build/payload-runner-burp.jar`
+- 刷新内置 payload：
+  - `/Users/aur4r0/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 scripts/extract_payloads.py 测试payload速取.xlsx src/main/resources/payloads.yaml`
+- 运行方式：在 Burp Suite `Extensions -> Installed -> Add -> Java` 中加载构建产物。
 
 ## 测试命令
 
-- 当前没有可用测试命令。
-- 不要声称测试已通过，除非实际运行过对应命令。
-- 若后续添加测试框架，必须在本节记录最小可执行测试命令。
-- 对小改动优先运行相关测试；对共享逻辑、入口、配置或用户可见行为的改动，运行完整测试。
+- 当前使用无依赖 Java smoke test。
+- 最小测试命令：
+  - `sh scripts/test.sh`
+- 构建验证命令：
+  - `sh scripts/build.sh`
+- 不要声称 Burp 内功能已验证，除非实际在 Burp 中加载并操作过。
 
 ## 代码风格
 

@@ -101,6 +101,24 @@ Right-click a Burp request and choose Send to Payload Runner.
 GitHub: https://github.com/Aur4r0/Payload-Runner
 ```
 
+## Screenshots / 界面截图
+
+### Runner
+
+<img src="docs/images/payload-runner-runner.png" alt="Payload Runner Runner page" width="100%">
+
+Runner 页面用于维护内置 YAML payload、编辑命中规则、套用规则模板、
+选择 payload 分类、管理 queued requests，并配置编码策略、发包速率、
+History 上限、响应保存大小、关键词和 endpoint Profile。
+
+### Results and Request History
+
+<img src="docs/images/payload-runner-results-history.png" alt="Payload Runner Results and Request History page" width="100%">
+
+Results 页面用于查看状态码、长度、耗时、Score、Hit、Diff、Interesting 和
+Sent to Repeater；上方提供过滤、手动发送到 Repeater、标记 interesting 和清空结果。
+下方 Request History 可以按 endpoint 前进/后退浏览每个 payload 变体的请求和响应。
+
 ## 使用说明
 
 1. 在 Burp 的任意请求里，把要跑 payload 的参数值位置标成 `*`。

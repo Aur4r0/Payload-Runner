@@ -88,6 +88,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JCheckBox followLatestCheckBox = new JCheckBox("Follow latest", true);
     private final JComboBox<EncodingStrategy> encodingCombo =
             new JComboBox<EncodingStrategy>(EncodingStrategy.values());
+    private final JComboBox<RateLimit> rateLimitCombo =
+            new JComboBox<RateLimit>(RateLimit.values());
     private final JComboBox<String> endpointCombo = new JComboBox<String>();
     private final JTextField maxHistoryField = new JTextField("500", 4);
     private final JTextField keywordField = new JTextField(24);
@@ -243,6 +245,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         configButtonRow.add(resetPayloadsButton);
         configButtonRow.add(new JLabel("Encoding"));
         configButtonRow.add(encodingCombo);
+        rateLimitCombo.setSelectedItem(RateLimit.MEDIUM);
+        configButtonRow.add(new JLabel("Rate"));
+        configButtonRow.add(rateLimitCombo);
         configButtonRow.add(new JLabel("Max history"));
         configButtonRow.add(maxHistoryField);
         configButtonRow.add(new JLabel("Keywords"));
@@ -830,6 +835,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         Map<String, List<String>> selectedPayloads = new LinkedHashMap<String, List<String>>();
         final EncodingStrategy encodingStrategy =
                 (EncodingStrategy) encodingCombo.getSelectedItem();
+        final RateLimit rateLimit = (RateLimit) rateLimitCombo.getSelectedItem();
         int maxHistoryRecords;
         try {
             maxHistoryRecords = Integer.parseInt(maxHistoryField.getText().trim());
@@ -866,7 +872,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
         setRunning(true);
         paused = false;
-        statusLabel.setText("Running 0 / " + totalRequests + " payload request(s)...");
+        statusLabel.setText("Running 0 / " + totalRequests + " payload request(s) at "
+                + rateLimit + " rate...");
         if (mainTabs != null) {
             mainTabs.setSelectedIndex(1);
         }
@@ -886,6 +893,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                             String category = entry.getKey();
                             for (String payload : entry.getValue()) {
                                 if (isCancelled() || !waitIfPaused()) {
+                                    return null;
+                                }
+                                if (attempted > 0 && !waitForRateLimit(rateLimit)) {
                                     return null;
                                 }
                                 int variantIndex = ++attempted;
@@ -920,7 +930,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     }
                 }
                 String status = "Running " + completed + " / " + totalRequests
-                        + " payload request(s)...";
+                        + " payload request(s) at " + rateLimit + " rate...";
                 if (droppedHistoryRecords > 0) {
                     status += " Dropped " + droppedHistoryRecords
                             + " old history record(s) due to max history.";
@@ -1018,6 +1028,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         exportButton.setEnabled(!running);
         maxHistoryField.setEnabled(!running);
         encodingCombo.setEnabled(!running);
+        rateLimitCombo.setEnabled(!running);
         keywordField.setEnabled(!running);
         rulesArea.setEnabled(!running);
         pauseButton.setEnabled(running);
@@ -1061,6 +1072,28 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             }
         }
         return activeWorker == null || !activeWorker.isCancelled();
+    }
+
+    private boolean waitForRateLimit(RateLimit rateLimit) {
+        long remaining = rateLimit == null ? 0L : rateLimit.getDelayMillis();
+        while (remaining > 0L) {
+            if (activeWorker != null && activeWorker.isCancelled()) {
+                return false;
+            }
+            if (!waitIfPaused()) {
+                return false;
+            }
+            long chunk = Math.min(remaining, 100L);
+            long started = System.currentTimeMillis();
+            try {
+                Thread.sleep(chunk);
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+            remaining -= Math.max(1L, System.currentTimeMillis() - started);
+        }
+        return waitIfPaused();
     }
 
     private void exportResults() {

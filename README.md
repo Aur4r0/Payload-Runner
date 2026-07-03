@@ -21,6 +21,10 @@ parameters whose values contain `*`.
   - `URL encode`
   - `JSON escape`
   - `Raw`
+- Request rate presets:
+  - `Low`
+  - `Medium`
+  - `High`
 - Pause/resume and stop controls
 - Keyword matching against responses
 - Internal Request History grouped by endpoint
@@ -96,6 +100,8 @@ each category become payload entries in the built-in YAML.
      清空选择。
    - `Encoding`：选择 payload 写入请求时的编码策略：`URL encode`、
      `JSON escape` 或 `Raw`。
+   - `Rate`：选择发包速率，默认 `Medium`。`Low` 每包间隔约 1000ms，
+     `Medium` 每包间隔约 250ms，`High` 不增加额外等待。
    - `Max history`：每个 endpoint 最多保留多少条完整请求/响应历史，默认 500；
      超过后释放最旧记录的请求/响应 bytes，结果表元数据仍保留。
    - `Keywords` / `Hit rules`：设置响应命中规则。
@@ -142,6 +148,10 @@ the `Hit rules` panel and saved through Burp extension settings.
 Response diff compares each payload response with the original response attached
 to the Burp message that was sent to Payload Runner. If the source message has
 no response, the `Diff` column is blank.
+
+Rate limiting is applied between payload requests in the background runner
+thread. It does not block the Swing UI, and Pause/Stop remain responsive during
+rate waits.
 
 Payload runs no longer auto-open Repeater tabs for every variant. Each mutated
 request and response is stored in the plugin's Request History. Repeater only

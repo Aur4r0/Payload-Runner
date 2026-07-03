@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JComboBox;
 import javax.swing.JMenuItem;
 import javax.swing.JList;
 import javax.swing.JPanel;
@@ -43,6 +44,7 @@ public final class SmokeTest {
         testDefaultPayloadResource();
         testQueryInsertionPoints();
         testEncodingStrategies();
+        testRateLimitDefaultsAndDelays();
         testRequestTemplateAcceptsUrlMarkerWithoutBody();
         testRequestTemplateBuildsMissingService();
         testFormInsertionPoints();
@@ -141,6 +143,26 @@ public final class SmokeTest {
         String escapedJson = helpers.bytesToString(
                 jsonPoints.get(0).buildRequest("\"x\"", EncodingStrategy.JSON_ESCAPE));
         assertContains(escapedJson, "\"name\":\"\\\"x\\\"\"", "json escape json strategy");
+    }
+
+    private static void testRateLimitDefaultsAndDelays() throws Exception {
+        assertEquals(1000L, RateLimit.LOW.getDelayMillis(), "low rate delay");
+        assertEquals(250L, RateLimit.MEDIUM.getDelayMillis(), "medium rate delay");
+        assertEquals(0L, RateLimit.HIGH.getDelayMillis(), "high rate delay");
+
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                @SuppressWarnings("unchecked")
+                JComboBox<RateLimit> rateLimitCombo =
+                        (JComboBox<RateLimit>) privateField(panel, "rateLimitCombo");
+                assertEquals(RateLimit.MEDIUM, rateLimitCombo.getSelectedItem(),
+                        "default rate limit");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
     }
 
     private static void testRequestTemplateAcceptsUrlMarkerWithoutBody() {

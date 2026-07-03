@@ -38,6 +38,7 @@ import javax.swing.JMenuItem;
 import javax.swing.JList;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -61,13 +62,17 @@ public final class SmokeTest {
         testRepeaterSkippedWhenHistoryBytesDropped();
         testSendPayloadCreatesHistoryWithoutAutoRepeater();
         testHistoryStoreNavigationAndLimit();
+        testHistoryResponseTruncationAndScore();
         testEndpointKeyExcludesQuery();
         testResultRowSelectsHistoryRecord();
         testManualRepeaterButtons();
+        testProfileSaveAndLoad();
+        testRerunSelectedResults();
         testResultFiltersAndSummary();
         testUiSettingsPersistenceAndPayloadDedupe();
         testHitRuleTemplate();
         testCsvExport();
+        testExtensionLoadBanner();
         testContextMenuCapturesSelectionSnapshot();
         testCategorySelectionDoesNotExpandOnParse();
         testQueuedRequestSelectionControlsRunSnapshot();
@@ -365,16 +370,16 @@ public final class SmokeTest {
                 invokePrivate(panel, "sendPayload",
                         new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
                                 String.class, String.class, EncodingStrategy.class, List.class,
-                                int.class},
+                                int.class, int.class},
                         template, insertionPoint, "ids", "42", EncodingStrategy.URL_ENCODE,
-                        Collections.<HitRule>emptyList(), Integer.valueOf(3));
+                        Collections.<HitRule>emptyList(), Integer.valueOf(3), Integer.valueOf(1024));
 
                 RunnerResult result = (RunnerResult) invokePrivate(panel, "sendPayload",
                         new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
                                 String.class, String.class, EncodingStrategy.class, List.class,
-                                int.class},
+                                int.class, int.class},
                         template, insertionPoint, "ids", "43", EncodingStrategy.URL_ENCODE,
-                        Collections.<HitRule>emptyList(), Integer.valueOf(4));
+                        Collections.<HitRule>emptyList(), Integer.valueOf(4), Integer.valueOf(1024));
                 assertEquals(0, callbacks.repeaterSendCount, "sendPayload does not auto repeater");
                 assertContains(result.getHistoryRecord().getEndpointKey(),
                         "POST http://example.test:80/submit", "history endpoint key");
@@ -423,6 +428,39 @@ public final class SmokeTest {
 
         assertEquals("POST http://example.test:80/submit", record.getEndpointKey(),
                 "endpoint key strips query");
+    }
+
+    private static void testHistoryResponseTruncationAndScore() throws Exception {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                FakeMessage.queryWithMarker());
+        byte[] response = callbacks.helpers.stringToBytes("HTTP/1.1 500 Error\r\n\r\n"
+                + "abcdefghijklmnopqrstuvwxyz");
+        HistoryRecord record = new HistoryRecord(1L, template, "url:id", "ids", "1",
+                callbacks.helpers.stringToBytes("GET / HTTP/1.1\r\n\r\n"), response,
+                500, response.length, 2500L, System.currentTimeMillis(), 16);
+
+        assertEquals(true, record.isResponseTruncated(), "response truncation flag");
+        assertEquals(16, record.getResponseBytes().length, "truncated response length");
+
+        final FakeCallbacks panelCallbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel =
+                        new PayloadRunnerPanel(panelCallbacks, panelCallbacks.helpers);
+                byte[] baseline = panelCallbacks.helpers.stringToBytes(
+                        "HTTP/1.1 200 OK\r\n\r\nabc");
+                ResponseDiff diff = ResponseDiff.between(panelCallbacks.helpers, baseline,
+                        response, 500);
+                Integer score = (Integer) invokePrivate(panel, "scoreResult",
+                        new Class<?>[] {int.class, long.class, String.class,
+                                ResponseDiff.class, String.class},
+                        Integer.valueOf(500), Long.valueOf(2500L), "keyword:root", diff, null);
+                assertEquals(true, score.intValue() >= 80, "high signal score");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
     }
 
     private static void testResultRowSelectsHistoryRecord() throws Exception {
@@ -513,6 +551,125 @@ public final class SmokeTest {
                 throw new RuntimeException(ex);
             }
         });
+    }
+
+    private static void testProfileSaveAndLoad() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                panel.addRequests(new IHttpRequestResponse[] {FakeMessage.queryWithMarker()});
+                @SuppressWarnings("unchecked")
+                JList<String> categories = (JList<String>) privateField(panel, "categoryList");
+                @SuppressWarnings("unchecked")
+                JComboBox<EncodingStrategy> encodingCombo =
+                        (JComboBox<EncodingStrategy>) privateField(panel, "encodingCombo");
+                @SuppressWarnings("unchecked")
+                JComboBox<RateLimit> rateLimitCombo =
+                        (JComboBox<RateLimit>) privateField(panel, "rateLimitCombo");
+                JTextField maxHistoryField =
+                        (JTextField) privateField(panel, "maxHistoryField");
+                JTextField maxResponseKbField =
+                        (JTextField) privateField(panel, "maxResponseKbField");
+                JTextField keywordField =
+                        (JTextField) privateField(panel, "keywordField");
+                JTextArea rulesArea = (JTextArea) privateField(panel, "rulesArea");
+                JTextField repeaterCaptionPrefixField =
+                        (JTextField) privateField(panel, "repeaterCaptionPrefixField");
+                JCheckBox followLatestCheckBox =
+                        (JCheckBox) privateField(panel, "followLatestCheckBox");
+
+                categories.setSelectedIndex(indexOfCategory(categories, "XSS"));
+                encodingCombo.setSelectedItem(EncodingStrategy.RAW);
+                rateLimitCombo.setSelectedItem(RateLimit.LOW);
+                maxHistoryField.setText("321");
+                maxResponseKbField.setText("64");
+                keywordField.setText("root");
+                rulesArea.setText("status:5xx");
+                repeaterCaptionPrefixField.setText("profile");
+                followLatestCheckBox.setSelected(false);
+                invokePrivate(panel, "saveCurrentProfile", new Class<?>[] {});
+
+                PayloadRunnerPanel loaded = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                invokePrivate(loaded, "loadSelectedProfile", new Class<?>[] {});
+                @SuppressWarnings("unchecked")
+                JComboBox<EncodingStrategy> loadedEncoding =
+                        (JComboBox<EncodingStrategy>) privateField(loaded, "encodingCombo");
+                @SuppressWarnings("unchecked")
+                JComboBox<RateLimit> loadedRate =
+                        (JComboBox<RateLimit>) privateField(loaded, "rateLimitCombo");
+                @SuppressWarnings("unchecked")
+                JList<String> loadedCategories =
+                        (JList<String>) privateField(loaded, "categoryList");
+
+                assertEquals(EncodingStrategy.RAW, loadedEncoding.getSelectedItem(),
+                        "profile encoding");
+                assertEquals(RateLimit.LOW, loadedRate.getSelectedItem(), "profile rate");
+                assertEquals("321", ((JTextField) privateField(loaded, "maxHistoryField")).getText(),
+                        "profile max history");
+                assertEquals("64", ((JTextField) privateField(loaded, "maxResponseKbField")).getText(),
+                        "profile max response");
+                assertEquals("root", ((JTextField) privateField(loaded, "keywordField")).getText(),
+                        "profile keywords");
+                assertEquals("status:5xx", ((JTextArea) privateField(loaded, "rulesArea")).getText(),
+                        "profile rules");
+                assertEquals("profile", ((JTextField) privateField(loaded,
+                        "repeaterCaptionPrefixField")).getText(), "profile repeater prefix");
+                assertEquals(false, ((JCheckBox) privateField(loaded,
+                        "followLatestCheckBox")).isSelected(), "profile follow latest");
+                assertEquals(Collections.singletonList("XSS"),
+                        loadedCategories.getSelectedValuesList(), "profile categories");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testRerunSelectedResults() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        final PayloadRunnerPanel[] panelHolder = new PayloadRunnerPanel[1];
+        final ResultTableModel[] resultModelHolder = new ResultTableModel[1];
+        final RunnerResult[] originalHolder = new RunnerResult[1];
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                        FakeMessage.queryWithMarker());
+                RunnerResult original = new RunnerResult(template, "url:id", "ids", "42",
+                        callbacks.helpers.stringToBytes("GET /old HTTP/1.1\r\n\r\n"),
+                        callbacks.helpers.stringToBytes("HTTP/1.1 200 OK\r\n\r\nold"),
+                        200, 19, 1L, "", "", false, "", null);
+                ResultTableModel resultModel =
+                        (ResultTableModel) privateField(panel, "resultModel");
+                resultModel.addResult(original);
+                callbacks.nextResponse = callbacks.helpers.stringToBytes(
+                        "HTTP/1.1 200 OK\r\n\r\nrerun");
+                invokePrivate(panel, "rerunResults",
+                        new Class<?>[] {List.class, String.class},
+                        Collections.singletonList(original), "selected result(s)");
+                panelHolder[0] = panel;
+                resultModelHolder[0] = resultModel;
+                originalHolder[0] = original;
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+
+        @SuppressWarnings("unchecked")
+        SwingWorker<Void, RunnerResult> worker =
+                (SwingWorker<Void, RunnerResult>) privateField(panelHolder[0], "activeWorker");
+        worker.get();
+        for (int i = 0; i < 20 && resultModelHolder[0].getRowCount() < 2; i++) {
+            Thread.sleep(25L);
+            SwingUtilities.invokeAndWait(() -> {});
+        }
+
+        assertEquals(1, callbacks.httpRequestCount, "rerun http request count");
+        assertEquals(2, resultModelHolder[0].getRowCount(), "rerun appends result");
+        RunnerResult rerun = resultModelHolder[0].getResult(1);
+        assertEquals("42", rerun.getPayload(), "rerun payload");
+        assertEquals(originalHolder[0].getParameterName(), rerun.getParameterName(),
+                "rerun parameter");
     }
 
     private static void testResultFiltersAndSummary() throws Exception {
@@ -609,6 +766,8 @@ public final class SmokeTest {
                         (JComboBox<RateLimit>) privateField(panel, "rateLimitCombo");
                 JTextField maxHistoryField =
                         (JTextField) privateField(panel, "maxHistoryField");
+                JTextField maxResponseKbField =
+                        (JTextField) privateField(panel, "maxResponseKbField");
                 JTextField repeaterCaptionPrefixField =
                         (JTextField) privateField(panel, "repeaterCaptionPrefixField");
                 JCheckBox followLatestCheckBox =
@@ -617,6 +776,7 @@ public final class SmokeTest {
                 encodingCombo.setSelectedItem(EncodingStrategy.RAW);
                 rateLimitCombo.setSelectedItem(RateLimit.LOW);
                 maxHistoryField.setText("123");
+                maxResponseKbField.setText("456");
                 repeaterCaptionPrefixField.setText("查询");
                 followLatestCheckBox.setSelected(false);
                 invokePrivate(panel, "saveUiSettings", new Class<?>[] {});
@@ -635,6 +795,8 @@ public final class SmokeTest {
                         (JComboBox<RateLimit>) privateField(loaded, "rateLimitCombo");
                 JTextField loadedMaxHistory =
                         (JTextField) privateField(loaded, "maxHistoryField");
+                JTextField loadedMaxResponseKb =
+                        (JTextField) privateField(loaded, "maxResponseKbField");
                 JTextField loadedPrefix =
                         (JTextField) privateField(loaded, "repeaterCaptionPrefixField");
                 JCheckBox loadedFollowLatest =
@@ -645,6 +807,7 @@ public final class SmokeTest {
                 assertEquals(RateLimit.LOW, loadedRate.getSelectedItem(),
                         "loaded rate setting");
                 assertEquals("123", loadedMaxHistory.getText(), "loaded max history");
+                assertEquals("456", loadedMaxResponseKb.getText(), "loaded max response");
                 assertEquals("查询", loadedPrefix.getText(), "loaded repeater prefix");
                 assertEquals(false, loadedFollowLatest.isSelected(), "loaded follow latest");
             } catch (Exception ex) {
@@ -686,8 +849,20 @@ public final class SmokeTest {
         CsvExporter.export(file, Collections.singletonList(result));
         String csv = new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8);
         assertContains(csv, "keyword:ok", "csv hit export");
+        assertContains(csv, "score", "csv score header");
         assertContains(csv, "len +1, sim 90%", "csv diff export");
         file.delete();
+    }
+
+    private static void testExtensionLoadBanner() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        final BurpExtender extender = new BurpExtender();
+        SwingUtilities.invokeAndWait(() -> extender.registerExtenderCallbacks(callbacks));
+
+        assertContains(callbacks.outputText(), "Payload Runner loaded successfully.",
+                "extension load success banner");
+        assertContains(callbacks.outputText(), "https://github.com/Aur4r0/Payload-Runner",
+                "extension load github link");
     }
 
     private static void testContextMenuCapturesSelectionSnapshot() throws Exception {
@@ -872,6 +1047,15 @@ public final class SmokeTest {
         });
     }
 
+    private static int indexOfCategory(JList<String> categories, String name) {
+        for (int i = 0; i < categories.getModel().getSize(); i++) {
+            if (name.equals(categories.getModel().getElementAt(i))) {
+                return i;
+            }
+        }
+        throw new AssertionError("missing category " + name);
+    }
+
     private static Object privateField(Object target, String name) throws Exception {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
@@ -992,6 +1176,10 @@ public final class SmokeTest {
         private String repeaterCaption;
         private boolean failRepeaterSend;
         private String lastError = "";
+        private final StringBuilder output = new StringBuilder();
+        private byte[] nextResponse;
+        private int httpRequestCount;
+        private byte[] lastHttpRequest;
 
         @Override
         public void setExtensionName(String name) {
@@ -1022,7 +1210,12 @@ public final class SmokeTest {
 
         @Override
         public IHttpRequestResponse makeHttpRequest(IHttpService httpService, byte[] request) {
-            throw new UnsupportedOperationException();
+            if (nextResponse == null) {
+                throw new UnsupportedOperationException();
+            }
+            httpRequestCount++;
+            lastHttpRequest = request;
+            return new FakeMessage(request, httpService, nextResponse);
         }
 
         @Override
@@ -1049,8 +1242,17 @@ public final class SmokeTest {
         }
 
         @Override
+        public void printOutput(String message) {
+            output.append(message).append('\n');
+        }
+
+        @Override
         public void printError(String message) {
             lastError = message;
+        }
+
+        private String outputText() {
+            return output.toString();
         }
     }
 
@@ -1097,6 +1299,7 @@ public final class SmokeTest {
 
     private static final class FakeMessage implements IHttpRequestResponse {
         private final byte[] request;
+        private final byte[] response;
         private final IHttpService service;
 
         private FakeMessage(byte[] request) {
@@ -1104,8 +1307,13 @@ public final class SmokeTest {
         }
 
         private FakeMessage(byte[] request, IHttpService service) {
+            this(request, service, null);
+        }
+
+        private FakeMessage(byte[] request, IHttpService service, byte[] response) {
             this.request = request;
             this.service = service;
+            this.response = response;
         }
 
         static FakeMessage formWithMarker() {
@@ -1145,7 +1353,7 @@ public final class SmokeTest {
 
         @Override
         public byte[] getResponse() {
-            return null;
+            return response;
         }
 
         @Override

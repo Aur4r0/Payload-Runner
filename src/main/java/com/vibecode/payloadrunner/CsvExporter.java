@@ -15,7 +15,7 @@ final class CsvExporter {
     static void export(File file, List<RunnerResult> results) throws IOException {
         try (BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(
                 new FileOutputStream(file), StandardCharsets.UTF_8))) {
-            writer.write("index,endpoint,method,host,path,param,category,payload,interesting,sent_to_repeater,repeater_error,hit,diff,status,length,time_ms,error");
+            writer.write("index,endpoint,method,host,path,param,category,payload,interesting,sent_to_repeater,repeater_error,hit,score,diff,status,length,time_ms,error");
             writer.newLine();
             for (int i = 0; i < results.size(); i++) {
                 RunnerResult result = results.get(i);
@@ -44,6 +44,8 @@ final class CsvExporter {
                 writer.write(csv(result.getRepeaterError()));
                 writer.write(',');
                 writer.write(csv(result.getHitMatch()));
+                writer.write(',');
+                writer.write(csv(Integer.toString(result.getScore())));
                 writer.write(',');
                 writer.write(csv(result.getDiffSummary()));
                 writer.write(',');

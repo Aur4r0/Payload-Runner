@@ -7,7 +7,7 @@ import javax.swing.table.AbstractTableModel;
 final class ResultTableModel extends AbstractTableModel {
     private static final String[] COLUMNS = {
             "#", "Endpoint", "Method", "Host", "Path", "Param", "Category", "Payload",
-            "Interesting", "Sent to Repeater", "Hit", "Diff", "Status", "Length", "Time ms"
+            "Interesting", "Sent to Repeater", "Hit", "Score", "Diff", "Status", "Length", "Time ms"
     };
 
     private final List<RunnerResult> results = new ArrayList<RunnerResult>();
@@ -70,10 +70,10 @@ final class ResultTableModel extends AbstractTableModel {
 
     @Override
     public Class<?> getColumnClass(int columnIndex) {
-        if (columnIndex == 0 || columnIndex == 13) {
+        if (columnIndex == 0 || columnIndex == 11 || columnIndex == 14) {
             return Integer.class;
         }
-        if (columnIndex == 14) {
+        if (columnIndex == 15) {
             return Long.class;
         }
         return String.class;
@@ -112,14 +112,16 @@ final class ResultTableModel extends AbstractTableModel {
             case 10:
                 return result.getHitMatch();
             case 11:
-                return result.getDiffSummary();
+                return result.getScore();
             case 12:
+                return result.getDiffSummary();
+            case 13:
                 return result.getError() == null
                         ? Integer.toString(result.getStatusCode())
                         : "ERR: " + result.getError();
-            case 13:
-                return result.getResponseLength();
             case 14:
+                return result.getResponseLength();
+            case 15:
                 return result.getElapsedMillis();
             default:
                 return "";

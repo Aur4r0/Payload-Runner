@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  test-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Smoke test
+        run: sh scripts/test.sh
+
+      - name: Build jar
+        run: sh scripts/build.sh
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: payload-runner-burp
+          path: build/payload-runner-burp.jar
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "build/payload-runner-burp.jar#payload-runner-burp.jar" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Payload Runner $GITHUB_REF_NAME" \
+            --notes "Automated release for $GITHUB_REF_NAME." \
+          || gh release upload "$GITHUB_REF_NAME" \
+            "build/payload-runner-burp.jar#payload-runner-burp.jar" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

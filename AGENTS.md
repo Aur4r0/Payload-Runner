@@ -8,6 +8,7 @@
 - `src/compileOnly/java/burp/`：编译期 Burp legacy API stub，仅用于本地 `javac`，不要打进最终 jar。
 - `scripts/build.sh`：本地构建脚本。
 - `scripts/extract_payloads.py`：从 `测试payload速取.xlsx` 提取 payload 并生成内置 YAML。
+- `.github/workflows/ci.yml`：GitHub Actions，push/PR 自动测试和构建，`v*` tag 自动发布 jar。
 - 插件运行时 payload 和命中规则编辑内容通过 Burp extension settings 保存，不直接回写 jar 内资源。
 - `build/`：本地构建输出，已忽略，不提交。
 

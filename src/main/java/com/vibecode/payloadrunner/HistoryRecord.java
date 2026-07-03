@@ -9,6 +9,7 @@ final class HistoryRecord {
     private final String endpointKey;
     private byte[] requestBytes;
     private byte[] responseBytes;
+    private final boolean responseTruncated;
     private final String method;
     private final String path;
     private final String endpointPath;
@@ -29,9 +30,18 @@ final class HistoryRecord {
     HistoryRecord(long id, RequestTemplate template, String parameterName, String category,
             String payload, byte[] requestBytes, byte[] responseBytes, int statusCode,
             int responseLength, long responseTimeMs, long timestamp) {
+        this(id, template, parameterName, category, payload, requestBytes, responseBytes,
+                statusCode, responseLength, responseTimeMs, timestamp, Integer.MAX_VALUE);
+    }
+
+    HistoryRecord(long id, RequestTemplate template, String parameterName, String category,
+            String payload, byte[] requestBytes, byte[] responseBytes, int statusCode,
+            int responseLength, long responseTimeMs, long timestamp, int maxResponseBytes) {
         this.id = id;
         this.requestBytes = copy(requestBytes);
-        this.responseBytes = copy(responseBytes);
+        int responseLimit = maxResponseBytes <= 0 ? Integer.MAX_VALUE : maxResponseBytes;
+        this.responseBytes = copy(responseBytes, responseLimit);
+        this.responseTruncated = responseBytes != null && responseBytes.length > responseLimit;
         this.method = safe(template.getMethod());
         this.path = safe(template.getPath());
         this.endpointPath = stripQuery(this.path);
@@ -69,6 +79,10 @@ final class HistoryRecord {
 
     boolean hasRequestBytes() {
         return requestBytes != null;
+    }
+
+    boolean isResponseTruncated() {
+        return responseTruncated;
     }
 
     void discardMessages() {
@@ -173,5 +187,13 @@ final class HistoryRecord {
 
     private static byte[] copy(byte[] value) {
         return value == null ? null : Arrays.copyOf(value, value.length);
+    }
+
+    private static byte[] copy(byte[] value, int maxBytes) {
+        if (value == null) {
+            return null;
+        }
+        int length = Math.min(value.length, Math.max(0, maxBytes));
+        return Arrays.copyOf(value, length);
     }
 }

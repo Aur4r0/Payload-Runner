@@ -23,5 +23,7 @@ public interface IBurpExtenderCallbacks {
 
     String loadExtensionSetting(String name);
 
+    void printOutput(String message);
+
     void printError(String message);
 }

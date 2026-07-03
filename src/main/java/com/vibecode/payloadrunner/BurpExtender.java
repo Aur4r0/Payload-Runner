@@ -25,6 +25,9 @@ public class BurpExtender implements IBurpExtender, ITab, IContextMenuFactory {
         callbacks.registerContextMenuFactory(this);
         callbacks.customizeUiComponent(panel);
         callbacks.addSuiteTab(this);
+        callbacks.printOutput("Payload Runner loaded successfully.");
+        callbacks.printOutput("Right-click a Burp request and choose Send to Payload Runner.");
+        callbacks.printOutput("GitHub: https://github.com/Aur4r0/Payload-Runner");
     }
 
     @Override

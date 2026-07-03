@@ -25,12 +25,16 @@ parameters whose values contain `*`.
   - `Low`
   - `Medium`
   - `High`
+- Endpoint profiles for saving and loading runner settings
 - Pause/resume and stop controls
 - Keyword matching against responses
 - Internal Request History grouped by endpoint
+- Max response KB limit for stored history response bytes
 - Manual Repeater sending for current, selected, or interesting history records
 - Optional Repeater tab caption prefix for manual sends
 - Result filters for text, hits, interesting records, and status classes
+- Result score column for quickly sorting higher-signal responses
+- Result table rerun actions for selected, failed, hit, or interesting rows
 - Built-in hit rule templates
 - Hit rules:
   - `keyword:admin`
@@ -68,8 +72,9 @@ sh scripts/test.sh
 ```
 
 The smoke test covers YAML parsing, marker replacement, rate presets, history
-navigation, manual Repeater sending, result filtering, settings persistence,
-CSV export, and queue actions.
+navigation, response truncation, scoring, profiles, rerun actions, manual
+Repeater sending, result filtering, settings persistence, CSV export, extension
+load output, and queue actions.
 
 ## Refresh Built-in Payloads
 
@@ -87,6 +92,14 @@ each category become payload entries in the built-in YAML.
 3. Click `Add`.
 4. Select extension type `Java`.
 5. Choose `build/payload-runner-burp.jar`.
+
+After the extension is imported, Burp's extension output shows:
+
+```text
+Payload Runner loaded successfully.
+Right-click a Burp request and choose Send to Payload Runner.
+GitHub: https://github.com/Aur4r0/Payload-Runner
+```
 
 ## 使用说明
 
@@ -109,13 +122,20 @@ each category become payload entries in the built-in YAML.
      `Medium` 每包间隔约 250ms，`High` 不增加额外等待。
    - `Max history`：每个 endpoint 最多保留多少条完整请求/响应历史，默认 500；
      超过后释放最旧记录的请求/响应 bytes，结果表元数据仍保留。
+   - `Max resp KB`：每条 History 记录最多保存多少 KB 响应 bytes，默认 1024；
+     状态码、长度、diff 和命中判断仍基于完整响应，Viewer/消息导出使用截断副本。
    - `Keywords` / `Hit rules`：设置响应命中规则，也可以选择模板后点击
      `Apply Template` 快速填入常见规则。
+   - `Profile`：按 endpoint 保存/加载当前分类、编码、速率、命中规则、关键词、
+     History 限制和 Repeater 前缀。
 4. 点击 `Run Selected` 开始运行。
    - 运行前会按分类对 payload 去重，状态栏会显示 unique payload 数和跳过的重复数量。
 5. 在 `Results` 页面查看状态码、长度、耗时、命中规则、diff、Interesting 和
-   Sent to Repeater。点击任意结果行会在 `Request History` 中定位到该变体。
+   Sent to Repeater。`Score` 越高代表命中、状态变化、diff 或耗时异常越明显。
+   点击任意结果行会在 `Request History` 中定位到该变体。
    - `Filter`、`Hits`、`Interesting` 和状态码下拉框可以缩小结果表范围。
+   - 右键结果表可以 `Rerun Selected`、`Rerun Failed`、`Rerun Hits` 或
+     `Rerun Interesting`，重跑会使用当前编码、速率和命中规则，结果追加到表格和 History。
 6. 在 `Request History` 中按 endpoint 浏览记录：
    - `Previous` / `Next` 在当前 endpoint 内前进后退。
    - `Follow latest` 默认开启，新结果会自动跳到最新记录；关闭后不会打断当前查看位置。
@@ -182,3 +202,11 @@ When an endpoint exceeds `Max history`, old result rows stay in the table for
 status review and CSV export, but their full request/response bytes are dropped
 to keep memory bounded. Those dropped rows cannot be sent to Repeater unless you
 rerun or increase the history limit before they are evicted.
+
+`Max resp KB` limits only the response bytes stored in Request History. Result
+metadata such as status, response length, elapsed time, score, hit rules, and
+diff are calculated before truncation.
+
+GitHub Actions runs `sh scripts/test.sh` and `sh scripts/build.sh` on pushes and
+pull requests. Tags starting with `v` also build the jar and publish or replace
+the Release asset.

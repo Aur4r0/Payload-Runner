@@ -96,8 +96,8 @@ each category become payload entries in the built-in YAML.
      清空选择。
    - `Encoding`：选择 payload 写入请求时的编码策略：`URL encode`、
      `JSON escape` 或 `Raw`。
-   - `Max history`：每个 endpoint 最多保留多少条请求历史，默认 500；
-     超过后丢弃最旧记录。
+   - `Max history`：每个 endpoint 最多保留多少条完整请求/响应历史，默认 500；
+     超过后释放最旧记录的请求/响应 bytes，结果表元数据仍保留。
    - `Keywords` / `Hit rules`：设置响应命中规则。
 4. 点击 `Run Selected` 开始运行。
 5. 在 `Results` 页面查看状态码、长度、耗时、命中规则、diff、Interesting 和
@@ -153,3 +153,8 @@ one list. Repeater tab captions use
 `METHOD PATH | CATEGORY | PARAM | #INDEX` and are capped at 80 characters.
 Repeater send failures are logged through Burp extension stderr and do not stop
 the payload run.
+
+When an endpoint exceeds `Max history`, old result rows stay in the table for
+status review and CSV export, but their full request/response bytes are dropped
+to keep memory bounded. Those dropped rows cannot be sent to Repeater unless you
+rerun or increase the history limit before they are evicted.

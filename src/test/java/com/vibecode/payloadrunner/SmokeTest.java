@@ -52,6 +52,7 @@ public final class SmokeTest {
         testResponseDiffAndHitRules();
         testRepeaterCaptionAndSend();
         testRepeaterSendFailureDoesNotThrow();
+        testRepeaterSkippedWhenHistoryBytesDropped();
         testSendPayloadCreatesHistoryWithoutAutoRepeater();
         testHistoryStoreNavigationAndLimit();
         testEndpointKeyExcludesQuery();
@@ -298,6 +299,24 @@ public final class SmokeTest {
                 "repeater error logged");
     }
 
+    private static void testRepeaterSkippedWhenHistoryBytesDropped() {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                FakeMessage.queryWithMarker());
+        HistoryRecord record = new HistoryRecord(1L, template, "url:id", "ids", "42",
+                callbacks.helpers.stringToBytes("GET / HTTP/1.1\r\n\r\n"), null, 200, 0,
+                1L, System.currentTimeMillis());
+        record.discardMessages();
+
+        RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record, 1);
+        assertEquals(false, result.isSent(), "dropped history repeater send failure");
+        assertEquals(0, callbacks.repeaterSendCount, "dropped history repeater send count");
+        assertContains(result.getError(), "dropped due to max history",
+                "dropped history repeater error");
+        assertContains(callbacks.lastError, "sendToRepeater failed",
+                "dropped history repeater error logged");
+    }
+
     private static void testSendPayloadCreatesHistoryWithoutAutoRepeater() throws Exception {
         final FakeCallbacks callbacks = new FakeCallbacks();
         SwingUtilities.invokeAndWait(() -> {
@@ -352,6 +371,8 @@ public final class SmokeTest {
         assertEquals(1, appendResult.getDroppedCount(), "history trim dropped oldest");
         assertEquals(2, store.size(first.getEndpointKey()), "history size after trim");
         assertEquals(-1, store.indexOf(first), "oldest history removed");
+        assertEquals(null, first.getRequestBytes(), "trimmed history request bytes discarded");
+        assertEquals(true, second.getRequestBytes() != null, "kept history request bytes retained");
         assertEquals(true, store.currentRecord(first.getEndpointKey()) == second,
                 "current record adjusted after trim");
     }

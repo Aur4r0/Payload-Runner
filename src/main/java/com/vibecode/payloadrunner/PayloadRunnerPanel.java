@@ -911,6 +911,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     if (shouldShowNewRecord(result.getHistoryRecord())) {
                         historyStore.select(result.getHistoryRecord());
                         showHistoryRecord(result.getHistoryRecord());
+                    } else if (currentHistoryRecord != null
+                            && historyStore.indexOf(currentHistoryRecord) < 0) {
+                        showHistoryRecord(historyStore.currentRecord(
+                                currentHistoryRecord.getEndpointKey()));
                     } else {
                         updateHistoryHeader();
                     }
@@ -1095,7 +1099,11 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             return;
         }
         int modelRow = resultTable.convertRowIndexToModel(viewRow);
-        showHistoryRecord(resultModel.getResult(modelRow).getHistoryRecord());
+        HistoryRecord record = resultModel.getResult(modelRow).getHistoryRecord();
+        showHistoryRecord(record);
+        if (!record.hasRequestBytes()) {
+            statusLabel.setText("Request/response bytes for this result were dropped due to max history.");
+        }
     }
 
     @Override

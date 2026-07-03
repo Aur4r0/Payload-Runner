@@ -121,7 +121,8 @@ final class HistoryStore {
     private int trimEndpoint(String endpointKey, List<HistoryRecord> records) {
         int dropped = 0;
         while (records.size() > maxRecordsPerEndpoint) {
-            records.remove(0);
+            HistoryRecord droppedRecord = records.remove(0);
+            droppedRecord.discardMessages();
             dropped++;
         }
         if (records.isEmpty()) {

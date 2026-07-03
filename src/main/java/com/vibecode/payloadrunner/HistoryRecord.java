@@ -2,11 +2,13 @@ package com.vibecode.payloadrunner;
 
 import burp.IHttpService;
 
+import java.util.Arrays;
+
 final class HistoryRecord {
     private final long id;
     private final String endpointKey;
-    private final byte[] requestBytes;
-    private final byte[] responseBytes;
+    private byte[] requestBytes;
+    private byte[] responseBytes;
     private final String method;
     private final String path;
     private final String endpointPath;
@@ -28,8 +30,8 @@ final class HistoryRecord {
             String payload, byte[] requestBytes, byte[] responseBytes, int statusCode,
             int responseLength, long responseTimeMs, long timestamp) {
         this.id = id;
-        this.requestBytes = requestBytes;
-        this.responseBytes = responseBytes;
+        this.requestBytes = copy(requestBytes);
+        this.responseBytes = copy(responseBytes);
         this.method = safe(template.getMethod());
         this.path = safe(template.getPath());
         this.endpointPath = stripQuery(this.path);
@@ -63,6 +65,15 @@ final class HistoryRecord {
 
     byte[] getResponseBytes() {
         return responseBytes;
+    }
+
+    boolean hasRequestBytes() {
+        return requestBytes != null;
+    }
+
+    void discardMessages() {
+        requestBytes = null;
+        responseBytes = null;
     }
 
     String getMethod() {
@@ -158,5 +169,9 @@ final class HistoryRecord {
 
     private static String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private static byte[] copy(byte[] value) {
+        return value == null ? null : Arrays.copyOf(value, value.length);
     }
 }

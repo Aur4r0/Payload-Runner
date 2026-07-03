@@ -12,6 +12,11 @@ final class RepeaterSupport {
             int displayIndex) {
         String caption = buildCaption(record.getMethod(), record.getEndpointPath(),
                 record.getCategory(), record.getParameterName(), displayIndex);
+        if (!record.hasRequestBytes()) {
+            String message = "request bytes were dropped due to max history";
+            logError(callbacks, "sendToRepeater failed: " + message);
+            return SendResult.failed(caption, message);
+        }
         try {
             callbacks.sendToRepeater(record.getHost(), record.getPort(), record.isUseHttps(),
                     record.getRequestBytes(), caption);
@@ -19,12 +24,16 @@ final class RepeaterSupport {
             return SendResult.sent(caption);
         } catch (Exception ex) {
             String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
-            try {
-                callbacks.printError("sendToRepeater failed: " + message);
-            } catch (Exception ignored) {
-                // Some test doubles or older environments may not surface extension stderr.
-            }
+            logError(callbacks, "sendToRepeater failed: " + message);
             return SendResult.failed(caption, message);
+        }
+    }
+
+    private static void logError(IBurpExtenderCallbacks callbacks, String message) {
+        try {
+            callbacks.printError(message);
+        } catch (Exception ignored) {
+            // Some test doubles or older environments may not surface extension stderr.
         }
     }
 

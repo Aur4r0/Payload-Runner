@@ -1,9 +1,9 @@
 package com.vibecode.payloadrunner;
 
 enum RateLimit {
-    LOW("Low", 1000L),
-    MEDIUM("Medium", 250L),
-    HIGH("High", 0L);
+    LOW("低速", 1000L),
+    MEDIUM("标准", 250L),
+    HIGH("高速", 0L);
 
     private final String label;
     private final long delayMillis;

@@ -66,14 +66,14 @@ final class ResponseDiff {
             return "";
         }
         StringBuilder result = new StringBuilder();
-        result.append("len ");
+        result.append("长度 ");
         if (lengthDelta >= 0) {
             result.append('+');
         }
         result.append(lengthDelta);
-        result.append(", sim ").append(similarityPercent).append('%');
+        result.append(", 相似度 ").append(similarityPercent).append('%');
         if (baselineStatus >= 0 && statusDelta != 0) {
-            result.append(", status ");
+            result.append(", 状态码 ");
             if (statusDelta >= 0) {
                 result.append('+');
             }
@@ -97,4 +97,3 @@ final class ResponseDiff {
         return (int) Math.round((same * 100.0d) / max);
     }
 }
-

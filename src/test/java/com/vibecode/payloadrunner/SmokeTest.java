@@ -40,6 +40,7 @@ import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import javax.swing.JTable;
+import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 
@@ -73,6 +74,7 @@ public final class SmokeTest {
         testHitRuleTemplate();
         testCsvExport();
         testExtensionLoadBanner();
+        testLocalizedUiLabels();
         testContextMenuCapturesSelectionSnapshot();
         testCategorySelectionDoesNotExpandOnParse();
         testQueuedRequestSelectionControlsRunSnapshot();
@@ -336,7 +338,7 @@ public final class SmokeTest {
         RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record, 1);
         assertEquals(false, result.isSent(), "repeater send failure");
         assertEquals(true, result.getError().contains("boom"), "repeater send error");
-        assertEquals(true, callbacks.lastError.contains("sendToRepeater failed"),
+        assertEquals(true, callbacks.lastError.contains("发送到 Repeater 失败"),
                 "repeater error logged");
     }
 
@@ -352,9 +354,9 @@ public final class SmokeTest {
         RepeaterSupport.SendResult result = RepeaterSupport.sendRecord(callbacks, record, 1);
         assertEquals(false, result.isSent(), "dropped history repeater send failure");
         assertEquals(0, callbacks.repeaterSendCount, "dropped history repeater send count");
-        assertContains(result.getError(), "dropped due to max history",
+        assertContains(result.getError(), "根据历史上限释放",
                 "dropped history repeater error");
-        assertContains(callbacks.lastError, "sendToRepeater failed",
+        assertContains(callbacks.lastError, "发送到 Repeater 失败",
                 "dropped history repeater error logged");
     }
 
@@ -710,7 +712,7 @@ public final class SmokeTest {
 
                 invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
                 assertEquals(2, resultTable.getRowCount(), "unfiltered result row count");
-                assertContains(resultSummaryLabel.getText(), "2 / 2 visible", "summary visible count");
+                assertContains(resultSummaryLabel.getText(), "显示 2 / 共 2", "summary visible count");
 
                 filterHitsCheckBox.setSelected(true);
                 invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
@@ -726,7 +728,7 @@ public final class SmokeTest {
                 invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
                 assertEquals(1, resultTable.getRowCount(), "status filter row count");
 
-                statusFilterCombo.setSelectedItem("All statuses");
+                statusFilterCombo.setSelectedItem("全部状态");
                 resultFilterField.setText("xss");
                 invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
                 assertEquals(1, resultTable.getRowCount(), "text filter row count");
@@ -734,14 +736,14 @@ public final class SmokeTest {
                 resultFilterField.setText("");
                 invokePrivate(panel, "applyResultFilters", new Class<?>[] {});
                 resultTable.setRowSelectionInterval(1, 1);
-                exportScopeCombo.setSelectedItem("Selected");
+                exportScopeCombo.setSelectedItem("选中结果");
                 @SuppressWarnings("unchecked")
                 List<RunnerResult> selectedResults = (List<RunnerResult>) invokePrivate(panel,
                         "resultsForExportScope", new Class<?>[] {});
                 assertEquals(1, selectedResults.size(), "selected export scope count");
                 assertEquals(true, selectedResults.get(0) == hit, "selected export result");
 
-                exportScopeCombo.setSelectedItem("Interesting");
+                exportScopeCombo.setSelectedItem("重点结果");
                 @SuppressWarnings("unchecked")
                 List<RunnerResult> interestingResults = (List<RunnerResult>) invokePrivate(panel,
                         "resultsForExportScope", new Class<?>[] {});
@@ -828,7 +830,7 @@ public final class SmokeTest {
                 hitRuleTemplateCombo.setSelectedItem(HitRuleTemplate.SQLI);
                 invokePrivate(panel, "applyRuleTemplate", new Class<?>[] {});
 
-                assertContains(rulesArea.getText(), "SQL injection signals",
+                assertContains(rulesArea.getText(), "SQL 注入特征",
                         "sqli template text");
                 assertEquals(true, HitRule.parse("", rulesArea.getText()).size() > 0,
                         "sqli template parses");
@@ -859,10 +861,35 @@ public final class SmokeTest {
         final BurpExtender extender = new BurpExtender();
         SwingUtilities.invokeAndWait(() -> extender.registerExtenderCallbacks(callbacks));
 
-        assertContains(callbacks.outputText(), "Payload Runner loaded successfully.",
+        assertContains(callbacks.outputText(), "Payload Runner 加载成功。",
                 "extension load success banner");
         assertContains(callbacks.outputText(), "https://github.com/Aur4r0/Payload-Runner",
                 "extension load github link");
+    }
+
+    private static void testLocalizedUiLabels() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                assertEquals("运行选中项",
+                        ((JButton) privateField(panel, "runButton")).getText(),
+                        "localized run button");
+                assertEquals("自动跟随最新结果",
+                        ((JCheckBox) privateField(panel, "followLatestCheckBox")).getText(),
+                        "localized follow latest");
+                assertEquals("全部状态",
+                        ((JComboBox<?>) privateField(panel, "statusFilterCombo")).getItemAt(0),
+                        "localized status filter");
+                assertEquals("接口", ((JTable) privateField(panel, "resultTable"))
+                        .getColumnName(1), "localized result column");
+                JTabbedPane tabs = (JTabbedPane) privateField(panel, "mainTabs");
+                assertEquals("任务配置", tabs.getTitleAt(0), "localized runner tab");
+                assertEquals("运行结果", tabs.getTitleAt(1), "localized results tab");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
     }
 
     private static void testContextMenuCapturesSelectionSnapshot() throws Exception {

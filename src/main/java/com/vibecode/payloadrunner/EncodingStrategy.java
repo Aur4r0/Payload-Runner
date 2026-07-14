@@ -3,9 +3,9 @@ package com.vibecode.payloadrunner;
 import burp.IExtensionHelpers;
 
 enum EncodingStrategy {
-    URL_ENCODE("URL encode"),
-    JSON_ESCAPE("JSON escape"),
-    RAW("Raw");
+    URL_ENCODE("URL 编码"),
+    JSON_ESCAPE("JSON 转义"),
+    RAW("原始内容");
 
     private final String label;
 
@@ -30,4 +30,3 @@ enum EncodingStrategy {
         return label;
     }
 }
-

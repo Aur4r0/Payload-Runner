@@ -5,10 +5,10 @@ import java.util.Locale;
 
 enum BodyKind {
     JSON("JSON"),
-    FORM_URLENCODED("form-urlencoded"),
-    MULTIPART("multipart"),
+    FORM_URLENCODED("表单"),
+    MULTIPART("多段表单"),
     XML("XML"),
-    UNSUPPORTED("unsupported");
+    UNSUPPORTED("暂不支持");
 
     private final String label;
 

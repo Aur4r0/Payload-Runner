@@ -72,8 +72,8 @@ abstract class HitRule {
                     }
                 };
             } catch (PatternSyntaxException ex) {
-                throw new IllegalArgumentException("Hit rule line " + lineNumber
-                        + " has an invalid regex: " + ex.getDescription());
+                throw new IllegalArgumentException("命中规则第 " + lineNumber
+                        + " 行的正则表达式无效：" + ex.getDescription());
             }
         }
         if (lower.startsWith("status:") || lower.startsWith("status=")) {
@@ -98,7 +98,7 @@ abstract class HitRule {
 
     private static HitRule keyword(String keyword) {
         if (keyword == null || keyword.isEmpty()) {
-            throw new IllegalArgumentException("Keyword hit rule cannot be empty.");
+            throw new IllegalArgumentException("关键词命中规则不能为空。");
         }
         return new HitRule("keyword:" + keyword) {
             @Override
@@ -129,8 +129,7 @@ abstract class HitRule {
                 }
             };
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("Hit rule line " + lineNumber
-                    + " has an invalid status value.");
+            throw new IllegalArgumentException("命中规则第 " + lineNumber + " 行的状态码无效。");
         }
     }
 
@@ -145,8 +144,8 @@ abstract class HitRule {
             operator = trimmed.substring(0, 1);
             value = trimmed.substring(1).trim();
         } else {
-            throw new IllegalArgumentException("Hit rule line " + lineNumber
-                    + " must use an operator, for example " + field + ">100.");
+            throw new IllegalArgumentException("命中规则第 " + lineNumber
+                    + " 行缺少比较运算符，例如 " + field + ">100。");
         }
         try {
             int expected = Integer.parseInt(value);
@@ -157,8 +156,7 @@ abstract class HitRule {
                 }
             };
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("Hit rule line " + lineNumber
-                    + " has an invalid numeric value.");
+            throw new IllegalArgumentException("命中规则第 " + lineNumber + " 行的数值无效。");
         }
     }
 
@@ -237,4 +235,3 @@ abstract class HitRule {
         }
     }
 }
-

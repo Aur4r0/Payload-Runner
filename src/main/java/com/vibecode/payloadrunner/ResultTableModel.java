@@ -6,8 +6,8 @@ import javax.swing.table.AbstractTableModel;
 
 final class ResultTableModel extends AbstractTableModel {
     private static final String[] COLUMNS = {
-            "#", "Endpoint", "Method", "Host", "Path", "Param", "Category", "Payload",
-            "Interesting", "Sent to Repeater", "Hit", "Score", "Diff", "Status", "Length", "Time ms"
+            "#", "接口", "方法", "主机", "路径", "参数", "分类", "Payload",
+            "重点", "已发送至 Repeater", "命中", "评分", "差异", "状态码", "长度", "耗时(ms)"
     };
 
     private final List<RunnerResult> results = new ArrayList<RunnerResult>();
@@ -106,9 +106,9 @@ final class ResultTableModel extends AbstractTableModel {
             case 7:
                 return record.payloadPreview();
             case 8:
-                return record.isInteresting() ? "Yes" : "No";
+                return record.isInteresting() ? "是" : "否";
             case 9:
-                return result.isSentToRepeater() ? "Yes" : "No";
+                return result.isSentToRepeater() ? "是" : "否";
             case 10:
                 return result.getHitMatch();
             case 11:
@@ -118,7 +118,7 @@ final class ResultTableModel extends AbstractTableModel {
             case 13:
                 return result.getError() == null
                         ? Integer.toString(result.getStatusCode())
-                        : "ERR: " + result.getError();
+                        : "错误: " + result.getError();
             case 14:
                 return result.getResponseLength();
             case 15:

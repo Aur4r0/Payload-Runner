@@ -25,8 +25,8 @@ public class BurpExtender implements IBurpExtender, ITab, IContextMenuFactory {
         callbacks.registerContextMenuFactory(this);
         callbacks.customizeUiComponent(panel);
         callbacks.addSuiteTab(this);
-        callbacks.printOutput("Payload Runner loaded successfully.");
-        callbacks.printOutput("Right-click a Burp request and choose Send to Payload Runner.");
+        callbacks.printOutput("Payload Runner 加载成功。");
+        callbacks.printOutput("在 Burp 请求上右键，选择“发送到 Payload Runner”即可添加任务。");
         callbacks.printOutput("GitHub: https://github.com/Aur4r0/Payload-Runner");
     }
 
@@ -35,7 +35,7 @@ public class BurpExtender implements IBurpExtender, ITab, IContextMenuFactory {
         final IHttpRequestResponse[] selectedMessages = resolveMessages(invocation);
 
         List<JMenuItem> items = new ArrayList<JMenuItem>();
-        JMenuItem sendItem = new JMenuItem("Send to Payload Runner");
+        JMenuItem sendItem = new JMenuItem("发送到 Payload Runner");
         sendItem.addActionListener(event -> panel.addRequests(selectedMessages));
         items.add(sendItem);
         return items;

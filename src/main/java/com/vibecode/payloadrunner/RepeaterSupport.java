@@ -18,8 +18,8 @@ final class RepeaterSupport {
         String caption = buildCaption(record.getMethod(), record.getEndpointPath(),
                 record.getCategory(), record.getParameterName(), displayIndex, captionPrefix);
         if (!record.hasRequestBytes()) {
-            String message = "request bytes were dropped due to max history";
-            logError(callbacks, "sendToRepeater failed: " + message);
+            String message = "请求报文已根据历史上限释放";
+            logError(callbacks, "发送到 Repeater 失败：" + message);
             return SendResult.failed(caption, message);
         }
         try {
@@ -29,7 +29,7 @@ final class RepeaterSupport {
             return SendResult.sent(caption);
         } catch (Exception ex) {
             String message = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
-            logError(callbacks, "sendToRepeater failed: " + message);
+            logError(callbacks, "发送到 Repeater 失败：" + message);
             return SendResult.failed(caption, message);
         }
     }

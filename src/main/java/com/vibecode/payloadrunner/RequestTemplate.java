@@ -33,7 +33,7 @@ final class RequestTemplate {
 
     static RequestTemplate fromMessage(IExtensionHelpers helpers, IHttpRequestResponse message) {
         if (message == null || message.getRequest() == null) {
-            throw new IllegalArgumentException("Request message is incomplete.");
+            throw new IllegalArgumentException("请求报文不完整。");
         }
 
         byte[] request = Arrays.copyOf(message.getRequest(), message.getRequest().length);
@@ -46,7 +46,7 @@ final class RequestTemplate {
             service = buildServiceFromRequest(helpers, requestInfo, headers);
         }
         if (service == null) {
-            throw new IllegalArgumentException("Request is missing an HTTP service.");
+            throw new IllegalArgumentException("请求缺少 HTTP 服务信息。");
         }
         String body = extractBody(helpers, request, requestInfo.getBodyOffset());
 
@@ -102,7 +102,7 @@ final class RequestTemplate {
     @Override
     public String toString() {
         return method + " " + host + path + " [" + bodyType + ", "
-                + insertionPoints.size() + " marker(s)]";
+                + insertionPoints.size() + " 个标记点]";
     }
 
     private static String safeMethod(IRequestInfo requestInfo) {
@@ -184,11 +184,11 @@ final class RequestTemplate {
             }
         }
         if (body.trim().isEmpty()) {
-            return hasUrlMarkers ? "URL query" : "no body";
+            return hasUrlMarkers ? "URL 查询参数" : "无请求体";
         }
         if (bodyKind == BodyKind.UNSUPPORTED) {
-            return hasUrlMarkers ? "URL query + unsupported body" : "unsupported body";
+            return hasUrlMarkers ? "URL 查询参数 + 暂不支持的请求体" : "暂不支持的请求体";
         }
-        return hasUrlMarkers ? "URL query + " + bodyKind.getLabel() : bodyKind.getLabel();
+        return hasUrlMarkers ? "URL 查询参数 + " + bodyKind.getLabel() : bodyKind.getLabel();
     }
 }

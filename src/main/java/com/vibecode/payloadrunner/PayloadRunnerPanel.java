@@ -70,8 +70,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private static final String PROFILE_SETTING_PREFIX = "profile.";
     private static final String DEFAULT_YAML = DefaultPayloads.load();
     private static final String DEFAULT_RULES =
-            "# One rule per line: keyword:admin, regex:uid=\\d+, status:5xx,\n"
-                    + "# length>1000, diff>200, sim<90\n";
+            "# 每行一条规则：keyword:admin、regex:uid=\\d+、status:5xx\n"
+                    + "# 也支持 length>1000、diff>200、sim<90\n";
 
     private final IBurpExtenderCallbacks callbacks;
     private final IExtensionHelpers helpers;
@@ -85,31 +85,31 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JTable resultTable = new JTable(resultModel);
     private final TableRowSorter<ResultTableModel> resultSorter =
             new TableRowSorter<ResultTableModel>(resultModel);
-    private final JLabel statusLabel = new JLabel("Right-click a request and choose Send to Payload Runner.");
-    private final JButton parseButton = new JButton("Parse YAML");
-    private final JButton savePayloadsButton = new JButton("Save Payloads");
-    private final JButton resetPayloadsButton = new JButton("Reset Built-in");
-    private final JButton runButton = new JButton("Run Selected");
-    private final JButton pauseButton = new JButton("Pause");
-    private final JButton stopButton = new JButton("Stop");
-    private final JButton clearRequestsButton = new JButton("Clear Requests");
-    private final JButton clearResultsButton = new JButton("Clear Results");
-    private final JButton exportButton = new JButton("Export CSV");
-    private final JButton exportMessagesButton = new JButton("Export Messages");
-    private final JButton saveProfileButton = new JButton("Save Profile");
-    private final JButton loadProfileButton = new JButton("Load Profile");
-    private final JButton saveRulesButton = new JButton("Save Rules");
-    private final JButton resetRulesButton = new JButton("Reset Rules");
-    private final JButton applyRuleTemplateButton = new JButton("Apply Template");
-    private final JButton selectAllCategoriesButton = new JButton("All");
-    private final JButton clearCategoriesButton = new JButton("None");
-    private final JButton previousHistoryButton = new JButton("Previous");
-    private final JButton nextHistoryButton = new JButton("Next");
-    private final JButton sendCurrentRepeaterButton = new JButton("Send current to Repeater");
-    private final JButton sendSelectedRepeaterButton = new JButton("Send selected rows to Repeater");
-    private final JButton sendInterestingRepeaterButton = new JButton("Send interesting to Repeater");
-    private final JButton markInterestingButton = new JButton("Mark interesting");
-    private final JCheckBox followLatestCheckBox = new JCheckBox("Follow latest", true);
+    private final JLabel statusLabel = new JLabel("在 Burp 请求上右键，选择“发送到 Payload Runner”即可添加任务。");
+    private final JButton parseButton = new JButton("解析 YAML");
+    private final JButton savePayloadsButton = new JButton("保存 Payload");
+    private final JButton resetPayloadsButton = new JButton("恢复内置 Payload");
+    private final JButton runButton = new JButton("运行选中项");
+    private final JButton pauseButton = new JButton("暂停");
+    private final JButton stopButton = new JButton("停止");
+    private final JButton clearRequestsButton = new JButton("清空请求");
+    private final JButton clearResultsButton = new JButton("清空结果");
+    private final JButton exportButton = new JButton("导出 CSV");
+    private final JButton exportMessagesButton = new JButton("导出报文");
+    private final JButton saveProfileButton = new JButton("保存配置");
+    private final JButton loadProfileButton = new JButton("加载配置");
+    private final JButton saveRulesButton = new JButton("保存规则");
+    private final JButton resetRulesButton = new JButton("重置规则");
+    private final JButton applyRuleTemplateButton = new JButton("应用模板");
+    private final JButton selectAllCategoriesButton = new JButton("全选");
+    private final JButton clearCategoriesButton = new JButton("全不选");
+    private final JButton previousHistoryButton = new JButton("上一条");
+    private final JButton nextHistoryButton = new JButton("下一条");
+    private final JButton sendCurrentRepeaterButton = new JButton("发送当前项到 Repeater");
+    private final JButton sendSelectedRepeaterButton = new JButton("发送选中项到 Repeater");
+    private final JButton sendInterestingRepeaterButton = new JButton("发送重点项到 Repeater");
+    private final JButton markInterestingButton = new JButton("标记为重点");
+    private final JCheckBox followLatestCheckBox = new JCheckBox("自动跟随最新结果", true);
     private final JComboBox<EncodingStrategy> encodingCombo =
             new JComboBox<EncodingStrategy>(EncodingStrategy.values());
     private final JComboBox<RateLimit> rateLimitCombo =
@@ -121,19 +121,19 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JTextField repeaterCaptionPrefixField = new JTextField(10);
     private final JTextField keywordField = new JTextField(24);
     private final JTextField resultFilterField = new JTextField(16);
-    private final JCheckBox filterHitsCheckBox = new JCheckBox("Hits");
-    private final JCheckBox filterInterestingCheckBox = new JCheckBox("Interesting");
+    private final JCheckBox filterHitsCheckBox = new JCheckBox("仅看命中");
+    private final JCheckBox filterInterestingCheckBox = new JCheckBox("仅看重点");
     private final JComboBox<String> statusFilterCombo = new JComboBox<String>(
-            new String[] {"All statuses", "Errors", "2xx", "3xx", "4xx", "5xx"});
+            new String[] {"全部状态", "请求错误", "2xx", "3xx", "4xx", "5xx"});
     private final JComboBox<String> exportScopeCombo = new JComboBox<String>(
-            new String[] {"All", "Selected", "Interesting"});
+            new String[] {"全部结果", "选中结果", "重点结果"});
     private final JComboBox<HitRuleTemplate> hitRuleTemplateCombo =
             new JComboBox<HitRuleTemplate>(HitRuleTemplate.values());
-    private final JLabel resultSummaryLabel = new JLabel("Results: 0");
+    private final JLabel resultSummaryLabel = new JLabel("结果：0");
     private final JLabel historyPositionLabel = new JLabel("#000 / 0");
-    private final JLabel historyCategoryLabel = new JLabel("Category: -");
-    private final JLabel historyParamLabel = new JLabel("Param: -");
-    private final JLabel historyPayloadLabel = new JLabel("Payload: -");
+    private final JLabel historyCategoryLabel = new JLabel("分类：-");
+    private final JLabel historyParamLabel = new JLabel("参数：-");
+    private final JLabel historyPayloadLabel = new JLabel("Payload：-");
     private final IMessageEditor requestViewer;
     private final IMessageEditor responseViewer;
     private JTabbedPane mainTabs;
@@ -163,7 +163,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     void addRequests(final IHttpRequestResponse[] messages) {
         if (messages == null || messages.length == 0) {
-            statusLabel.setText("Burp did not provide a selected HTTP request for this menu context.");
+            statusLabel.setText("当前右键菜单中没有可用的 HTTP 请求。");
             return;
         }
         if (!SwingUtilities.isEventDispatchThread()) {
@@ -182,7 +182,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 RequestTemplate template = RequestTemplate.fromMessage(helpers, message);
                 if (template.getInsertionPoints().isEmpty()) {
                     skippedNoMarker++;
-                    lastSkipReason = "No URL query, form, JSON, multipart, or XML values contain '*'.";
+                    lastSkipReason = "没有在 URL 查询参数、表单、JSON、Multipart 或 XML 值中找到“*”标记。";
                     continue;
                 }
                 int addedIndex = requestModel.size();
@@ -200,15 +200,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             }
         }
 
-        String summary = "Added " + added + " request(s); skipped " + skippedNoMarker
-                + " without markers";
+        String summary = "已添加 " + added + " 个请求，跳过 " + skippedNoMarker + " 个无标记请求";
         if (skippedError > 0) {
-            summary += "; skipped " + skippedError + " with parse errors";
+            summary += "，另有 " + skippedError + " 个请求解析失败";
         }
         if (!lastSkipReason.isEmpty()) {
-            summary += ". Last skip: " + lastSkipReason;
+            summary += "。最后一次跳过原因：" + lastSkipReason;
         } else {
-            summary += ".";
+            summary += "。";
         }
         statusLabel.setText(summary);
         if (added > 0) {
@@ -227,14 +226,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         yamlArea.setTabSize(2);
 
         JPanel yamlPanel = new JPanel(new BorderLayout(4, 4));
-        yamlPanel.setBorder(BorderFactory.createTitledBorder("YAML payloads"));
+        yamlPanel.setBorder(BorderFactory.createTitledBorder("Payload 配置（YAML）"));
         yamlPanel.add(new JScrollPane(yamlArea), BorderLayout.CENTER);
         yamlPanel.setMinimumSize(new Dimension(420, 260));
 
         categoryList.setVisibleRowCount(8);
         categoryList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         JPanel categoryPanel = new JPanel(new BorderLayout(4, 4));
-        categoryPanel.setBorder(BorderFactory.createTitledBorder("Categories"));
+        categoryPanel.setBorder(BorderFactory.createTitledBorder("Payload 分类"));
         categoryPanel.add(new JScrollPane(categoryList), BorderLayout.CENTER);
         JPanel categoryButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         categoryButtonPanel.add(selectAllCategoriesButton);
@@ -246,13 +245,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         requestList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         installRequestQueueActions();
         JPanel requestPanel = new JPanel(new BorderLayout(4, 4));
-        requestPanel.setBorder(BorderFactory.createTitledBorder("Queued requests"));
+        requestPanel.setBorder(BorderFactory.createTitledBorder("待执行请求"));
         requestPanel.add(new JScrollPane(requestList), BorderLayout.CENTER);
         requestPanel.setMinimumSize(new Dimension(360, 150));
 
         rulesArea.setLineWrap(false);
         JPanel rulesPanel = new JPanel(new BorderLayout(4, 4));
-        rulesPanel.setBorder(BorderFactory.createTitledBorder("Hit rules"));
+        rulesPanel.setBorder(BorderFactory.createTitledBorder("命中规则"));
         rulesPanel.add(new JScrollPane(rulesArea), BorderLayout.CENTER);
         JPanel rulesButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         rulesButtonPanel.add(hitRuleTemplateCombo);
@@ -283,20 +282,20 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         configButtonRow.add(parseButton);
         configButtonRow.add(savePayloadsButton);
         configButtonRow.add(resetPayloadsButton);
-        configButtonRow.add(new JLabel("Encoding"));
+        configButtonRow.add(new JLabel("编码方式"));
         configButtonRow.add(encodingCombo);
         rateLimitCombo.setSelectedItem(RateLimit.MEDIUM);
-        configButtonRow.add(new JLabel("Rate"));
+        configButtonRow.add(new JLabel("发送速率"));
         configButtonRow.add(rateLimitCombo);
-        configButtonRow.add(new JLabel("Max history"));
+        configButtonRow.add(new JLabel("单接口历史上限"));
         configButtonRow.add(maxHistoryField);
-        configButtonRow.add(new JLabel("Max resp KB"));
+        configButtonRow.add(new JLabel("响应保存上限(KB)"));
         configButtonRow.add(maxResponseKbField);
-        configButtonRow.add(new JLabel("Keywords"));
+        configButtonRow.add(new JLabel("命中关键词"));
         configButtonRow.add(keywordField);
         runButtonRow.add(runButton);
         runButtonRow.add(clearRequestsButton);
-        runButtonRow.add(new JLabel("Profile"));
+        runButtonRow.add(new JLabel("接口配置"));
         profileCombo.setPrototypeDisplayValue("POST https://example.com:443/api/search");
         runButtonRow.add(profileCombo);
         runButtonRow.add(saveProfileButton);
@@ -317,7 +316,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         configureResultColumns(resultTable.getColumnModel());
         installResultTableActions();
         JPanel resultPanel = new JPanel(new BorderLayout(4, 4));
-        resultPanel.setBorder(BorderFactory.createTitledBorder("Results"));
+        resultPanel.setBorder(BorderFactory.createTitledBorder("执行结果"));
         resultPanel.add(new JScrollPane(resultTable), BorderLayout.CENTER);
 
         Component requestComponent = requestViewer.getComponent();
@@ -327,9 +326,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         messageSplit.setPreferredSize(new Dimension(900, 280));
 
         JPanel historyHeaderPanel = new JPanel(new BorderLayout(4, 4));
-        historyHeaderPanel.setBorder(BorderFactory.createTitledBorder("Request History"));
+        historyHeaderPanel.setBorder(BorderFactory.createTitledBorder("请求历史"));
         JPanel historyNavPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        historyNavPanel.add(new JLabel("Endpoint"));
+        historyNavPanel.add(new JLabel("接口"));
         endpointCombo.setPrototypeDisplayValue("POST https://example.com:443/api/search");
         historyNavPanel.add(endpointCombo);
         historyNavPanel.add(previousHistoryButton);
@@ -355,7 +354,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resultControlPanel.add(pauseButton);
         resultControlPanel.add(stopButton);
         resultControlPanel.add(markInterestingButton);
-        resultControlPanel.add(new JLabel("Repeater prefix"));
+        resultControlPanel.add(new JLabel("Repeater 标签前缀"));
         resultControlPanel.add(repeaterCaptionPrefixField);
         resultControlPanel.add(sendCurrentRepeaterButton);
         resultControlPanel.add(sendSelectedRepeaterButton);
@@ -366,7 +365,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resultControlPanel.add(exportMessagesButton);
 
         JPanel resultFilterPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
-        resultFilterPanel.add(new JLabel("Filter"));
+        resultFilterPanel.add(new JLabel("快速筛选"));
         resultFilterPanel.add(resultFilterField);
         resultFilterPanel.add(filterHitsCheckBox);
         resultFilterPanel.add(filterInterestingCheckBox);
@@ -382,8 +381,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resultsPage.add(lowerSplit, BorderLayout.CENTER);
 
         mainTabs = new JTabbedPane();
-        mainTabs.addTab("Runner", runnerPage);
-        mainTabs.addTab("Results", resultsPage);
+        mainTabs.addTab("任务配置", runnerPage);
+        mainTabs.addTab("运行结果", resultsPage);
 
         add(mainTabs, BorderLayout.CENTER);
         add(statusLabel, BorderLayout.SOUTH);
@@ -442,16 +441,16 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             if (activeWorker != null) {
                 resumeIfPaused();
                 activeWorker.cancel(true);
-                statusLabel.setText("Stop requested; waiting for the active request to finish.");
+                statusLabel.setText("正在停止，等待当前请求结束……");
             }
         });
         clearRequestsButton.addActionListener(event -> {
             if (isRunnerActive()) {
-                statusLabel.setText("Stop the active run before clearing queued requests.");
+                statusLabel.setText("请先停止当前任务，再清空待执行请求。");
                 return;
             }
             requestModel.clear();
-            statusLabel.setText("Queued requests cleared.");
+            statusLabel.setText("待执行请求已清空。");
         });
         clearResultsButton.addActionListener(event -> {
             resultModel.clear();
@@ -460,7 +459,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             clearEndpointCombo();
             showHistoryRecord(null);
             updateResultSummary();
-            statusLabel.setText("Results cleared.");
+            statusLabel.setText("运行结果已清空。");
         });
         exportButton.addActionListener(event -> exportResults());
         exportMessagesButton.addActionListener(event -> exportMessages());
@@ -473,7 +472,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private void installRequestQueueActions() {
         final JPopupMenu popup = new JPopupMenu();
-        final JMenuItem deleteItem = new JMenuItem("Delete Selected");
+        final JMenuItem deleteItem = new JMenuItem("删除选中请求");
         deleteItem.addActionListener(event -> deleteSelectedRequests());
         popup.add(deleteItem);
 
@@ -524,13 +523,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private void deleteSelectedRequests() {
         if (isRunnerActive()) {
-            statusLabel.setText("Stop the active run before deleting queued requests.");
+            statusLabel.setText("请先停止当前任务，再删除待执行请求。");
             return;
         }
 
         int[] selected = requestList.getSelectedIndices();
         if (selected.length == 0) {
-            statusLabel.setText("Select queued request(s) to delete.");
+            statusLabel.setText("请先选择要删除的请求。");
             return;
         }
 
@@ -541,21 +540,20 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         if (requestModel.size() > 0) {
             requestList.setSelectedIndex(Math.min(nextSelection, requestModel.size() - 1));
         }
-        statusLabel.setText("Deleted " + selected.length + " queued request"
-                + (selected.length == 1 ? "." : "s."));
+        statusLabel.setText("已删除 " + selected.length + " 个待执行请求。");
     }
 
     private void installResultTableActions() {
         final JPopupMenu popup = new JPopupMenu();
-        JMenuItem rerunSelected = new JMenuItem("Rerun Selected");
-        JMenuItem rerunFailed = new JMenuItem("Rerun Failed");
-        JMenuItem rerunHits = new JMenuItem("Rerun Hits");
-        JMenuItem rerunInteresting = new JMenuItem("Rerun Interesting");
+        JMenuItem rerunSelected = new JMenuItem("重新运行选中项");
+        JMenuItem rerunFailed = new JMenuItem("重新运行失败项");
+        JMenuItem rerunHits = new JMenuItem("重新运行命中项");
+        JMenuItem rerunInteresting = new JMenuItem("重新运行重点项");
 
-        rerunSelected.addActionListener(event -> rerunResults(selectedResults(), "selected result(s)"));
-        rerunFailed.addActionListener(event -> rerunResults(failedResults(), "failed result(s)"));
-        rerunHits.addActionListener(event -> rerunResults(hitResults(), "hit result(s)"));
-        rerunInteresting.addActionListener(event -> rerunResults(interestingResults(), "interesting result(s)"));
+        rerunSelected.addActionListener(event -> rerunResults(selectedResults(), "选中结果"));
+        rerunFailed.addActionListener(event -> rerunResults(failedResults(), "失败结果"));
+        rerunHits.addActionListener(event -> rerunResults(hitResults(), "命中结果"));
+        rerunInteresting.addActionListener(event -> rerunResults(interestingResults(), "重点结果"));
 
         popup.add(rerunSelected);
         popup.add(rerunFailed);
@@ -717,14 +715,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private void updateHistoryHeader() {
         if (currentHistoryRecord == null) {
             historyPositionLabel.setText("#000 / 0");
-            historyCategoryLabel.setText("Category: -");
-            historyParamLabel.setText("Param: -");
-            historyPayloadLabel.setText("Payload: -");
+            historyCategoryLabel.setText("分类：-");
+            historyParamLabel.setText("参数：-");
+            historyPayloadLabel.setText("Payload：-");
             previousHistoryButton.setEnabled(false);
             nextHistoryButton.setEnabled(false);
             sendCurrentRepeaterButton.setEnabled(false);
             markInterestingButton.setEnabled(false);
-            markInterestingButton.setText("Mark interesting");
+            markInterestingButton.setText("标记为重点");
             return;
         }
 
@@ -735,16 +733,16 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         } else {
             historyPositionLabel.setText("#- / " + size);
         }
-        historyCategoryLabel.setText("Category: " + currentHistoryRecord.getCategory());
-        historyParamLabel.setText("Param: " + currentHistoryRecord.getParameterName());
-        historyPayloadLabel.setText("Payload: " + currentHistoryRecord.payloadPreview());
+        historyCategoryLabel.setText("分类：" + currentHistoryRecord.getCategory());
+        historyParamLabel.setText("参数：" + currentHistoryRecord.getParameterName());
+        historyPayloadLabel.setText("Payload：" + currentHistoryRecord.payloadPreview());
         previousHistoryButton.setEnabled(index > 0);
         nextHistoryButton.setEnabled(index >= 0 && index < size - 1);
         sendCurrentRepeaterButton.setEnabled(true);
         markInterestingButton.setEnabled(true);
         markInterestingButton.setText(currentHistoryRecord.isInteresting()
-                ? "Unmark interesting"
-                : "Mark interesting");
+                ? "取消重点标记"
+                : "标记为重点");
     }
 
     private String pad3(int value) {
@@ -764,7 +762,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private void toggleInteresting() {
         if (currentHistoryRecord == null) {
-            statusLabel.setText("Select a history record first.");
+            statusLabel.setText("请先选择一条历史记录。");
             return;
         }
         currentHistoryRecord.setInteresting(!currentHistoryRecord.isInteresting());
@@ -772,25 +770,25 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         updateHistoryHeader();
         applyResultFilters();
         statusLabel.setText(currentHistoryRecord.isInteresting()
-                ? "Marked current history record interesting."
-                : "Unmarked current history record.");
+                ? "已将当前记录标记为重点。"
+                : "已取消当前记录的重点标记。");
     }
 
     private void sendCurrentToRepeater() {
         if (currentHistoryRecord == null) {
-            statusLabel.setText("Select a history record first.");
+            statusLabel.setText("请先选择一条历史记录。");
             return;
         }
-        sendRecordsToRepeater(singleton(currentHistoryRecord), "current history record");
+        sendRecordsToRepeater(singleton(currentHistoryRecord), "当前记录");
     }
 
     private void sendSelectedRowsToRepeater() {
         List<HistoryRecord> records = selectedResultRecords();
         if (records.isEmpty()) {
-            statusLabel.setText("Select result row(s) to send to Repeater.");
+            statusLabel.setText("请先选择要发送到 Repeater 的结果。");
             return;
         }
-        sendRecordsToRepeater(records, "selected result row(s)");
+        sendRecordsToRepeater(records, "选中结果");
     }
 
     private void sendInterestingToRepeater() {
@@ -802,10 +800,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             }
         }
         if (records.isEmpty()) {
-            statusLabel.setText("No interesting history records to send.");
+            statusLabel.setText("当前没有可发送的重点记录。");
             return;
         }
-        sendRecordsToRepeater(records, "interesting history record(s)");
+        sendRecordsToRepeater(records, "重点记录");
     }
 
     private List<HistoryRecord> singleton(HistoryRecord record) {
@@ -840,10 +838,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             }
         }
         if (error.isEmpty()) {
-            statusLabel.setText("Sent " + sent + " " + label + " to Repeater.");
+            statusLabel.setText("已将 " + sent + " 条" + label + "发送到 Repeater。");
         } else {
-            statusLabel.setText("Sent " + sent + " " + label
-                    + " to Repeater. Last error: " + truncateStatus(error));
+            statusLabel.setText("已将 " + sent + " 条" + label
+                    + "发送到 Repeater。最后一个错误：" + truncateStatus(error));
         }
         updateHistoryHeader();
         updateResultSummary();
@@ -875,7 +873,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         final boolean onlyHits = filterHitsCheckBox.isSelected();
         final boolean onlyInteresting = filterInterestingCheckBox.isSelected();
         final String statusFilter = statusFilterCombo.getSelectedItem() == null
-                ? "All statuses"
+                ? "全部状态"
                 : statusFilterCombo.getSelectedItem().toString();
 
         resultSorter.setRowFilter(new RowFilter<ResultTableModel, Integer>() {
@@ -899,10 +897,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     }
 
     private boolean matchesStatusFilter(RunnerResult result, String statusFilter) {
-        if ("All statuses".equals(statusFilter)) {
+        if ("全部状态".equals(statusFilter)) {
             return true;
         }
-        if ("Errors".equals(statusFilter)) {
+        if ("请求错误".equals(statusFilter)) {
             return result.getError() != null || result.getStatusCode() < 0;
         }
         int statusCode = result.getStatusCode();
@@ -943,9 +941,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 errors++;
             }
         }
-        resultSummaryLabel.setText("Results: " + visible + " / " + total
-                + " visible, hits " + hits + ", interesting " + interesting
-                + ", errors " + errors);
+        resultSummaryLabel.setText("结果：显示 " + visible + " / 共 " + total
+                + "，命中 " + hits + "，重点 " + interesting + "，错误 " + errors);
     }
 
     private boolean parseYamlIntoCategories(boolean showDialogOnError) {
@@ -957,14 +954,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 categoryModel.addElement(category);
             }
             restoreCategorySelection(selectedBeforeParse);
-            statusLabel.setText("Loaded " + parsedPayloads.size() + " payload categor"
-                    + (parsedPayloads.size() == 1 ? "y." : "ies.")
-                    + " Select one or more categories to run.");
+            statusLabel.setText("已加载 " + parsedPayloads.size()
+                    + " 个 Payload 分类，请选择一个或多个分类后运行。");
             return true;
         } catch (IllegalArgumentException ex) {
-            statusLabel.setText("YAML error: " + ex.getMessage());
+            statusLabel.setText("YAML 格式错误：" + ex.getMessage());
             if (showDialogOnError) {
-                JOptionPane.showMessageDialog(this, ex.getMessage(), "YAML error",
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "YAML 格式错误",
                         JOptionPane.ERROR_MESSAGE);
             }
             return false;
@@ -998,16 +994,16 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private void selectAllCategories() {
         if (categoryModel.size() == 0) {
-            statusLabel.setText("No payload categories loaded.");
+            statusLabel.setText("尚未加载任何 Payload 分类。");
             return;
         }
         categoryList.setSelectionInterval(0, categoryModel.size() - 1);
-        statusLabel.setText("Selected " + categoryModel.size() + " payload categories.");
+        statusLabel.setText("已选择全部 " + categoryModel.size() + " 个 Payload 分类。");
     }
 
     private void clearCategorySelection() {
         categoryList.clearSelection();
-        statusLabel.setText("Category selection cleared.");
+        statusLabel.setText("已取消选择所有 Payload 分类。");
     }
 
     private void loadSavedPayloads() {
@@ -1097,7 +1093,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
         String endpointKey = selectedProfileEndpointKey();
         if (endpointKey == null || endpointKey.isEmpty()) {
-            statusLabel.setText("Queue or select a request before saving a profile.");
+            statusLabel.setText("请先添加或选择一个请求，再保存接口配置。");
             return;
         }
 
@@ -1124,9 +1120,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             loadProfilesIntoCombo();
             profileCombo.setSelectedItem(endpointKey);
             saveUiSettings();
-            statusLabel.setText("Saved profile for " + endpointKey + ".");
+            statusLabel.setText("已保存接口配置：" + endpointKey + "。");
         } catch (IOException ex) {
-            statusLabel.setText("Profile save failed: " + truncateStatus(ex.getMessage()));
+            statusLabel.setText("接口配置保存失败：" + truncateStatus(ex.getMessage()));
         }
     }
 
@@ -1135,12 +1131,12 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 ? selectedProfileEndpointKey()
                 : profileCombo.getSelectedItem().toString();
         if (endpointKey == null || endpointKey.isEmpty()) {
-            statusLabel.setText("Select a saved profile or queue a matching request.");
+            statusLabel.setText("请选择一个已保存的接口配置，或添加对应接口的请求。");
             return;
         }
         String saved = callbacks.loadExtensionSetting(profileSettingName(endpointKey));
         if (saved == null || saved.trim().isEmpty()) {
-            statusLabel.setText("No saved profile for " + endpointKey + ".");
+            statusLabel.setText("该接口尚未保存配置：" + endpointKey + "。");
             return;
         }
 
@@ -1148,7 +1144,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         try {
             profile.load(new StringReader(saved));
         } catch (IOException ex) {
-            statusLabel.setText("Profile load failed: " + truncateStatus(ex.getMessage()));
+            statusLabel.setText("接口配置加载失败：" + truncateStatus(ex.getMessage()));
             return;
         }
 
@@ -1168,7 +1164,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 profile.getProperty("followLatest", "true")));
         restoreCategorySelection(splitLines(profile.getProperty("categories", "")));
         saveUiSettings();
-        statusLabel.setText("Loaded profile for " + endpointKey + ".");
+        statusLabel.setText("已加载接口配置：" + endpointKey + "。");
     }
 
     private <T extends Enum<T>> void applyEnumSelection(JComboBox<T> combo, Class<T> enumType,
@@ -1270,14 +1266,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             return;
         }
         callbacks.saveExtensionSetting(PAYLOADS_SETTING, yamlArea.getText());
-        statusLabel.setText("Payload YAML saved to Burp extension settings.");
+        statusLabel.setText("Payload YAML 已保存到 Burp 扩展配置。");
     }
 
     private void resetPayloads() {
         yamlArea.setText(DefaultPayloads.load());
         if (parseYamlIntoCategories(true)) {
             callbacks.saveExtensionSetting(PAYLOADS_SETTING, yamlArea.getText());
-            statusLabel.setText("Payload YAML reset to built-in defaults and saved.");
+            statusLabel.setText("已恢复并保存内置 Payload YAML。");
         }
     }
 
@@ -1285,12 +1281,12 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         try {
             HitRule.parse(keywordField.getText(), rulesArea.getText());
         } catch (IllegalArgumentException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Hit rule error",
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "命中规则错误",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
         callbacks.saveExtensionSetting(RULES_SETTING, rulesArea.getText());
-        statusLabel.setText("Hit rules saved to Burp extension settings.");
+        statusLabel.setText("命中规则已保存到 Burp 扩展配置。");
     }
 
     private void applyRuleTemplate() {
@@ -1299,18 +1295,18 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             return;
         }
         rulesArea.setText(template.getRules());
-        statusLabel.setText("Applied hit rule template: " + template + ".");
+        statusLabel.setText("已应用命中规则模板：“" + template + "”。");
     }
 
     private void resetRules() {
         rulesArea.setText(DEFAULT_RULES);
         callbacks.saveExtensionSetting(RULES_SETTING, rulesArea.getText());
-        statusLabel.setText("Hit rules reset and saved.");
+        statusLabel.setText("命中规则已重置并保存。");
     }
 
     private void runSelectedCategories() {
         if (activeWorker != null && !activeWorker.isDone()) {
-            statusLabel.setText("Payload Runner is already running.");
+            statusLabel.setText("Payload Runner 正在运行，请等待当前任务结束。");
             return;
         }
         if (!parseYamlIntoCategories(true)) {
@@ -1319,13 +1315,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
         List<String> categories = categoryList.getSelectedValuesList();
         if (categories.isEmpty()) {
-            statusLabel.setText("Select at least one payload category.");
+            statusLabel.setText("请至少选择一个 Payload 分类。");
             return;
         }
 
         List<RequestTemplate> requests = snapshotRunRequests();
         if (requests.isEmpty()) {
-            statusLabel.setText("Queue at least one request from Burp's context menu.");
+            statusLabel.setText("请通过 Burp 右键菜单至少添加一个请求。");
             return;
         }
 
@@ -1337,11 +1333,11 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         try {
             maxHistoryRecords = Integer.parseInt(maxHistoryField.getText().trim());
         } catch (NumberFormatException ex) {
-            statusLabel.setText("Max history must be a positive integer.");
+            statusLabel.setText("单接口历史上限必须是正整数。");
             return;
         }
         if (maxHistoryRecords <= 0) {
-            statusLabel.setText("Max history must be a positive integer.");
+            statusLabel.setText("单接口历史上限必须是正整数。");
             return;
         }
         int maxResponseBytes = parseMaxResponseBytes();
@@ -1354,7 +1350,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         try {
             hitRules = HitRule.parse(keywordField.getText(), rulesArea.getText());
         } catch (IllegalArgumentException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Hit rule error",
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "命中规则错误",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
@@ -1375,21 +1371,20 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             }
         }
         if (total == 0) {
-            statusLabel.setText("Selected categories contain no payloads.");
+            statusLabel.setText("所选分类中没有可执行的 Payload。");
             return;
         }
         final int totalRequests = total;
         final int duplicatePayloadsSkipped = duplicatePayloadCount;
-        final String planSummary = categories.size() + " categor"
-                + (categories.size() == 1 ? "y" : "ies") + ", "
-                + uniquePayloadCount + " unique payload(s), "
-                + markerCount + " marker(s)";
+        final String planSummary = categories.size() + " 个分类，"
+                + uniquePayloadCount + " 个去重 Payload，"
+                + markerCount + " 个标记点";
 
         setRunning(true);
         paused = false;
-        statusLabel.setText("Running 0 / " + totalRequests + " payload request(s) at "
-                + rateLimit + " rate (" + planSummary + duplicateSummary(duplicatePayloadsSkipped)
-                + ")...");
+        statusLabel.setText("正在执行 0 / " + totalRequests + " 个请求，速率："
+                + rateLimit + "（" + planSummary + duplicateSummary(duplicatePayloadsSkipped)
+                + "）……");
         if (mainTabs != null) {
             mainTabs.setSelectedIndex(1);
         }
@@ -1430,12 +1425,11 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 completed += chunks.size();
                 int droppedHistoryRecords = appendRunnerResults(chunks);
                 updateResultSummary();
-                String status = "Running " + completed + " / " + totalRequests
-                        + " payload request(s) at " + rateLimit + " rate (" + planSummary
-                        + duplicateSummary(duplicatePayloadsSkipped) + ")...";
+                String status = "正在执行 " + completed + " / " + totalRequests
+                        + " 个请求，速率：" + rateLimit + "（" + planSummary
+                        + duplicateSummary(duplicatePayloadsSkipped) + "）……";
                 if (droppedHistoryRecords > 0) {
-                    status += " Dropped " + droppedHistoryRecords
-                            + " old history record(s) due to max history.";
+                    status += " 已根据历史上限释放 " + droppedHistoryRecords + " 条较早记录的报文数据。";
                 }
                 statusLabel.setText(status);
             }
@@ -1444,10 +1438,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             protected void done() {
                 setRunning(false);
                 paused = false;
-                pauseButton.setText("Pause");
+                pauseButton.setText("暂停");
                 statusLabel.setText(isCancelled()
-                        ? "Run stopped after " + completed + " payload request(s)."
-                        : "Run complete: " + completed + " payload request(s).");
+                        ? "任务已停止，共完成 " + completed + " 个请求。"
+                        : "任务执行完成，共发送 " + completed + " 个请求。");
             }
         };
         activeWorker.execute();
@@ -1455,11 +1449,11 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private void rerunResults(List<RunnerResult> sourceResults, String label) {
         if (isRunnerActive()) {
-            statusLabel.setText("Payload Runner is already running.");
+            statusLabel.setText("Payload Runner 正在运行，请等待当前任务结束。");
             return;
         }
         if (sourceResults == null || sourceResults.isEmpty()) {
-            statusLabel.setText("No " + label + " to rerun.");
+            statusLabel.setText("没有可重新运行的" + label + "。");
             return;
         }
 
@@ -1476,8 +1470,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     result.getCategory(), result.getPayload()));
         }
         if (variants.isEmpty()) {
-            statusLabel.setText("No rerunnable " + label
-                    + "; insertion point(s) no longer exist.");
+            statusLabel.setText("无法重新运行" + label + "：原请求中的标记点已不存在。");
             return;
         }
 
@@ -1485,11 +1478,11 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         try {
             maxHistoryRecords = Integer.parseInt(maxHistoryField.getText().trim());
         } catch (NumberFormatException ex) {
-            statusLabel.setText("Max history must be a positive integer.");
+            statusLabel.setText("单接口历史上限必须是正整数。");
             return;
         }
         if (maxHistoryRecords <= 0) {
-            statusLabel.setText("Max history must be a positive integer.");
+            statusLabel.setText("单接口历史上限必须是正整数。");
             return;
         }
         int maxResponseBytes = parseMaxResponseBytes();
@@ -1503,7 +1496,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         try {
             hitRules = HitRule.parse(keywordField.getText(), rulesArea.getText());
         } catch (IllegalArgumentException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Hit rule error",
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "命中规则错误",
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
@@ -1513,13 +1506,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         final RateLimit rateLimit = (RateLimit) rateLimitCombo.getSelectedItem();
         final int totalRequests = variants.size();
         final String skippedSummary = skipped > 0
-                ? ", skipped " + skipped + " missing insertion point(s)"
+                ? "，跳过 " + skipped + " 个缺少标记点的结果"
                 : "";
 
         setRunning(true);
         paused = false;
-        statusLabel.setText("Rerunning 0 / " + totalRequests + " " + label
-                + " at " + rateLimit + " rate" + skippedSummary + "...");
+        statusLabel.setText("正在重新运行" + label + "：0 / " + totalRequests
+                + "，速率：" + rateLimit + skippedSummary + "……");
         if (mainTabs != null) {
             mainTabs.setSelectedIndex(1);
         }
@@ -1550,11 +1543,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 completed += chunks.size();
                 int droppedHistoryRecords = appendRunnerResults(chunks);
                 updateResultSummary();
-                String status = "Rerunning " + completed + " / " + totalRequests + " "
-                        + label + " at " + rateLimit + " rate" + skippedSummary + "...";
+                String status = "正在重新运行" + label + "：" + completed + " / "
+                        + totalRequests + "，速率：" + rateLimit + skippedSummary + "……";
                 if (droppedHistoryRecords > 0) {
-                    status += " Dropped " + droppedHistoryRecords
-                            + " old history record(s) due to max history.";
+                    status += " 已根据历史上限释放 " + droppedHistoryRecords + " 条较早记录的报文数据。";
                 }
                 statusLabel.setText(status);
             }
@@ -1563,10 +1555,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             protected void done() {
                 setRunning(false);
                 paused = false;
-                pauseButton.setText("Pause");
+                pauseButton.setText("暂停");
                 statusLabel.setText(isCancelled()
-                        ? "Rerun stopped after " + completed + " payload request(s)."
-                        : "Rerun complete: " + completed + " payload request(s).");
+                        ? "重新运行已停止，共完成 " + completed + " 个请求。"
+                        : "重新运行完成，共发送 " + completed + " 个请求。");
             }
         };
         activeWorker.execute();
@@ -1648,11 +1640,11 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         try {
             maxResponseKb = Integer.parseInt(maxResponseKbField.getText().trim());
         } catch (NumberFormatException ex) {
-            statusLabel.setText("Max resp KB must be a positive integer.");
+            statusLabel.setText("响应保存上限必须是正整数。");
             return -1;
         }
         if (maxResponseKb <= 0) {
-            statusLabel.setText("Max resp KB must be a positive integer.");
+            statusLabel.setText("响应保存上限必须是正整数。");
             return -1;
         }
         long bytes = maxResponseKb * 1024L;
@@ -1731,7 +1723,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         if (duplicatePayloadsSkipped <= 0) {
             return "";
         }
-        return ", skipped " + duplicatePayloadsSkipped + " duplicate payload(s)";
+        return "，已跳过 " + duplicatePayloadsSkipped + " 个重复 Payload";
     }
 
     private int countInsertionPoints(List<RequestTemplate> requests) {
@@ -1769,7 +1761,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         pauseButton.setEnabled(running);
         stopButton.setEnabled(running);
         if (!running) {
-            pauseButton.setText("Pause");
+            pauseButton.setText("暂停");
         }
     }
 
@@ -1783,8 +1775,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 pauseLock.notifyAll();
             }
         }
-        pauseButton.setText(paused ? "Resume" : "Pause");
-        statusLabel.setText(paused ? "Paused." : "Resumed.");
+        pauseButton.setText(paused ? "继续" : "暂停");
+        statusLabel.setText(paused ? "任务已暂停。" : "任务已继续。" );
     }
 
     private void resumeIfPaused() {
@@ -1792,7 +1784,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             paused = false;
             pauseLock.notifyAll();
         }
-        pauseButton.setText("Pause");
+        pauseButton.setText("暂停");
     }
 
     private boolean waitIfPaused() {
@@ -1834,7 +1826,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private void exportResults() {
         List<RunnerResult> results = resultsForExportScope();
         if (results.isEmpty()) {
-            statusLabel.setText("No " + exportScopeLabel() + " result(s) to export.");
+            statusLabel.setText("没有可导出的" + exportScopeLabel() + "。");
             return;
         }
         JFileChooser chooser = new JFileChooser();
@@ -1845,11 +1837,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
         try {
             CsvExporter.export(chooser.getSelectedFile(), results);
-            statusLabel.setText("Exported " + results.size() + " " + exportScopeLabel()
-                    + " result(s) to "
-                    + chooser.getSelectedFile().getAbsolutePath());
+            statusLabel.setText("已将 " + results.size() + " 条" + exportScopeLabel()
+                    + "导出至 " + chooser.getSelectedFile().getAbsolutePath());
         } catch (IOException ex) {
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Export error",
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "导出失败",
                     JOptionPane.ERROR_MESSAGE);
         }
     }
@@ -1857,7 +1848,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private void exportMessages() {
         List<RunnerResult> results = resultsForExportScope();
         if (results.isEmpty()) {
-            statusLabel.setText("No " + exportScopeLabel() + " result(s) to export.");
+            statusLabel.setText("没有可导出的" + exportScopeLabel() + "。");
             return;
         }
         JFileChooser chooser = new JFileChooser();
@@ -1891,27 +1882,27 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     }
                 }
             } catch (IOException ex) {
-                JOptionPane.showMessageDialog(this, ex.getMessage(), "Export error",
+                JOptionPane.showMessageDialog(this, ex.getMessage(), "导出失败",
                         JOptionPane.ERROR_MESSAGE);
                 return;
             }
         }
-        statusLabel.setText("Exported " + written + " message file(s) to "
+        statusLabel.setText("已将 " + written + " 个报文文件导出至 "
                 + directory.getAbsolutePath() + (skipped > 0
-                ? "; skipped " + skipped + " dropped request(s)."
-                : ".") + (truncatedResponses > 0
-                ? " Wrote " + truncatedResponses + " truncated response(s)."
+                ? "；跳过 " + skipped + " 个已释放报文数据的请求。"
+                : "。") + (truncatedResponses > 0
+                ? " 其中 " + truncatedResponses + " 个响应为截断后的内容。"
                 : ""));
     }
 
     private List<RunnerResult> resultsForExportScope() {
         String scope = exportScopeCombo.getSelectedItem() == null
-                ? "All"
+                ? "全部结果"
                 : exportScopeCombo.getSelectedItem().toString();
-        if ("Selected".equals(scope)) {
+        if ("选中结果".equals(scope)) {
             return selectedResults();
         }
-        if ("Interesting".equals(scope)) {
+        if ("重点结果".equals(scope)) {
             List<RunnerResult> results = new ArrayList<RunnerResult>();
             for (RunnerResult result : resultModel.snapshot()) {
                 if (result.getHistoryRecord().isInteresting()) {
@@ -1934,8 +1925,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private String exportScopeLabel() {
         return exportScopeCombo.getSelectedItem() == null
-                ? "all"
-                : exportScopeCombo.getSelectedItem().toString().toLowerCase();
+                ? "全部结果"
+                : exportScopeCombo.getSelectedItem().toString();
     }
 
     private void writeBytes(File file, byte[] data) throws IOException {
@@ -1975,9 +1966,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         HistoryRecord record = resultModel.getResult(modelRow).getHistoryRecord();
         showHistoryRecord(record);
         if (!record.hasRequestBytes()) {
-            statusLabel.setText("Request/response bytes for this result were dropped due to max history.");
+            statusLabel.setText("该结果的请求/响应报文已根据历史上限释放。");
         } else if (record.isResponseTruncated()) {
-            statusLabel.setText("Response bytes for this result were truncated by Max resp KB.");
+            statusLabel.setText("该结果的响应报文已按响应保存上限截断。");
         }
     }
 

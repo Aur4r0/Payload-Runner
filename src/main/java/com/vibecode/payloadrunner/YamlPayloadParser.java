@@ -25,13 +25,12 @@ final class YamlPayloadParser {
             if (indent == 0 && !trimmed.startsWith("-")) {
                 int colon = trimmed.indexOf(':');
                 if (colon <= 0) {
-                    throw new IllegalArgumentException("Line " + (i + 1)
-                            + " must be a top-level category ending with ':'.");
+                    throw new IllegalArgumentException("第 " + (i + 1)
+                            + " 行必须是以“:”结尾的顶级分类。");
                 }
                 currentCategory = stripScalar(trimmed.substring(0, colon).trim());
                 if (currentCategory.isEmpty()) {
-                    throw new IllegalArgumentException("Line " + (i + 1)
-                            + " has an empty category name.");
+                    throw new IllegalArgumentException("第 " + (i + 1) + " 行的分类名称不能为空。");
                 }
                 if (!categories.containsKey(currentCategory)) {
                     categories.put(currentCategory, new ArrayList<String>());
@@ -42,16 +41,15 @@ final class YamlPayloadParser {
                     if (rest.startsWith("[") && rest.endsWith("]")) {
                         categories.get(currentCategory).addAll(parseInlineList(rest));
                     } else {
-                        throw new IllegalArgumentException("Line " + (i + 1)
-                                + " must use a list of payloads.");
+                        throw new IllegalArgumentException("第 " + (i + 1)
+                                + " 行必须使用 Payload 列表。");
                     }
                 }
                 continue;
             }
 
             if (currentCategory == null) {
-                throw new IllegalArgumentException("Line " + (i + 1)
-                        + " appears before any category.");
+                throw new IllegalArgumentException("第 " + (i + 1) + " 行之前缺少分类定义。");
             }
 
             if ("payloads:".equals(trimmed)) {
@@ -63,13 +61,12 @@ final class YamlPayloadParser {
                 continue;
             }
 
-            throw new IllegalArgumentException("Line " + (i + 1)
-                    + " is not a supported payload list item.");
+            throw new IllegalArgumentException("第 " + (i + 1) + " 行不是有效的 Payload 列表项。");
         }
 
         removeEmptyCategories(categories);
         if (categories.isEmpty()) {
-            throw new IllegalArgumentException("Add at least one category with one payload.");
+            throw new IllegalArgumentException("请至少添加一个包含 Payload 的分类。");
         }
         return categories;
     }
@@ -113,7 +110,7 @@ final class YamlPayloadParser {
             current.append(ch);
         }
         if (quote != 0) {
-            throw new IllegalArgumentException("Inline list has an unclosed quote.");
+            throw new IllegalArgumentException("行内列表中存在未闭合的引号。");
         }
         result.add(stripScalar(current.toString().trim()));
         return result;
@@ -193,4 +190,3 @@ final class YamlPayloadParser {
         }
     }
 }
-

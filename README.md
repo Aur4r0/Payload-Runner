@@ -133,8 +133,10 @@ Sent to Repeater；上方提供过滤、手动发送到 Repeater、标记 intere
 ## 使用说明
 
 1. 在 Burp 的任意请求里，把要跑 payload 的参数值位置标成 `*`。
+   - URL 路径参数示例：`GET /api/users/id*/detail HTTP/1.1`
    - URL 查询参数示例：`GET /search?q=* HTTP/1.1`
    - POST URL 查询参数示例：`POST /api?keyword=* HTTP/1.1`
+   - Header 示例：`X-Forwarded-For: *` 或 `Cookie: session=*`
    - form body 示例：`username=*&password=123`
    - JSON 示例：`{"keyword":"*"}`
    - multipart/XML 中的字段值同样支持 `*`
@@ -185,7 +187,10 @@ Sent to Repeater；上方提供过滤、手动发送到 Repeater、标记 intere
    - `发送当前项到 Repeater`：发送当前 History 记录。
    - `发送选中项到 Repeater`：发送结果表中选中的记录。
    - `发送重点项到 Repeater`：发送所有已标记为重点的记录。
-8. 运行中可以 `暂停` / `继续` / `停止`。需要保存结果时选择导出范围
+8. 运行中可以 `暂停` / `继续` / `停止`。Proxy 模式会主动关闭当前阻塞的
+   Proxy/TLS 连接：暂停后继续时会重试当前 Payload，停止时立即结束；直接发送使用
+   legacy `makeHttpRequest(...)`，官方 API 没有当前请求的取消句柄，因此需要等待当前
+   直连请求返回后才会完全停止。需要保存结果时选择导出范围
    `全部结果` / `选中结果` / `重点结果`，再点击 `导出 CSV`；需要保存原始包时点击
    `导出报文`。
 
@@ -292,6 +297,13 @@ one list. Manual Repeater tab captions use the optional `Repeater 标签前缀` 
 the per-click send batch index, or only the index when the prefix is empty.
 Captions are capped at 80 characters. Repeater send failures are logged through
 Burp extension stderr and do not stop the payload run.
+
+Requests generated in `经 Burp Proxy 发送` mode are matched through the official legacy
+`IProxyListener`. The extension writes the same request bytes back through the official
+`IHttpRequestResponse.setRequest(...)` API and adds
+`X-Payload-Runner-Edited: 1` so Burp can show the Proxy History request as `Edited`.
+This header is sent to the target and may affect request signatures, WAF rules, caching,
+strict Header allowlists, or application behavior. Direct mode does not add this header.
 
 When an endpoint exceeds `单接口历史上限`, old result rows stay in the table for
 status review and CSV export, but their full request/response bytes are dropped

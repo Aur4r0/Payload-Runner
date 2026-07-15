@@ -7,6 +7,9 @@ public interface IHttpRequestResponse {
 
     IHttpService getHttpService();
 
+    default void setRequest(byte[] request) {
+    }
+
     default String getHighlight() {
         return null;
     }

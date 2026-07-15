@@ -31,6 +31,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
@@ -166,6 +167,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private JTabbedPane mainTabs;
 
     private final Object pauseLock = new Object();
+    private final AtomicReference<ProxyTransport.Cancellation> activeProxyRequest =
+            new AtomicReference<ProxyTransport.Cancellation>();
     private final HistoryStore historyStore = new HistoryStore(500);
     private Map<String, List<String>> parsedPayloads = new LinkedHashMap<String, List<String>>();
     private SwingWorker<Void, RunnerResult> activeWorker;
@@ -217,7 +220,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 RequestTemplate template = RequestTemplate.fromMessage(helpers, message);
                 if (template.getInsertionPoints().isEmpty()) {
                     skippedNoMarker++;
-                    lastSkipReason = "没有在 URL 查询参数、表单、JSON、Multipart 或 XML 值中找到“*”标记。";
+                    lastSkipReason = "没有在 URL 路径、查询参数、Header 或请求体中找到“*”标记。";
                     continue;
                 }
                 int addedIndex = requestModel.size();
@@ -525,7 +528,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             if (activeWorker != null) {
                 resumeIfPaused();
                 activeWorker.cancel(true);
-                statusLabel.setText("正在停止，等待当前请求结束……");
+                cancelActiveProxyRequest();
+                statusLabel.setText("正在停止；Proxy 请求已中断。直接发送模式需等待当前请求返回……");
             }
         });
         clearRequestsButton.addActionListener(event -> {
@@ -1686,9 +1690,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                                     return null;
                                 }
                                 int variantIndex = ++attempted;
-                                publish(sendPayload(template, insertionPoint, category, payload,
+                                RunnerResult result = sendPayloadWithRetry(template,
+                                        insertionPoint, category, payload,
                                         encodingStrategy, hitRules, variantIndex,
-                                        maxResponseBytes, transportConfig, hitHighlightColor));
+                                        maxResponseBytes, transportConfig, hitHighlightColor);
+                                if (result == null || isCancelled()) {
+                                    return null;
+                                }
+                                publish(result);
                             }
                         }
                     }
@@ -1707,7 +1716,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 if (droppedHistoryRecords > 0) {
                     status += " 已根据历史上限释放 " + droppedHistoryRecords + " 条较早记录的报文数据。";
                 }
-                statusLabel.setText(status);
+                if (!paused) {
+                    statusLabel.setText(status);
+                }
             }
 
             @Override
@@ -1812,10 +1823,15 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                         return null;
                     }
                     int variantIndex = ++attempted;
-                    publish(sendPayload(variant.template, variant.insertionPoint,
+                    RunnerResult result = sendPayloadWithRetry(variant.template,
+                            variant.insertionPoint,
                             variant.category, variant.payload, encodingStrategy, hitRules,
                             variantIndex, maxResponseBytes, transportConfig,
-                            hitHighlightColor));
+                            hitHighlightColor);
+                    if (result == null || isCancelled()) {
+                        return null;
+                    }
+                    publish(result);
                 }
                 return null;
             }
@@ -1830,7 +1846,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 if (droppedHistoryRecords > 0) {
                     status += " 已根据历史上限释放 " + droppedHistoryRecords + " 条较早记录的报文数据。";
                 }
-                statusLabel.setText(status);
+                if (!paused) {
+                    statusLabel.setText(status);
+                }
             }
 
             @Override
@@ -1895,14 +1913,22 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         String hitMatch = "";
         ResponseDiff responseDiff = ResponseDiff.unavailable();
         String error = null;
+        boolean requestCancelled = false;
+        ProxyTransport.Cancellation proxyCancellation = null;
         try {
             if (transportConfig.usesProxy()) {
-                if (proxyHighlightSupport != null && hitHighlightColor.isEnabled()) {
+                if (proxyHighlightSupport != null) {
                     proxyTraceId = proxyHighlightSupport.begin(template.getService(), request);
+                }
+                proxyCancellation = new ProxyTransport.Cancellation();
+                activeProxyRequest.set(proxyCancellation);
+                SwingWorker<Void, RunnerResult> worker = activeWorker;
+                if (paused || (worker != null && worker.isCancelled())) {
+                    proxyCancellation.cancel();
                 }
                 response = ProxyTransport.send(template.getService(), request,
                         transportConfig.getProxyHost(), transportConfig.getProxyPort(),
-                        transportConfig.getProxyCa());
+                        transportConfig.getProxyCa(), proxyCancellation);
             } else {
                 directResult = callbacks.makeHttpRequest(template.getService(), request);
                 response = directResult == null ? null : directResult.getResponse();
@@ -1915,10 +1941,22 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 responseDiff = ResponseDiff.between(helpers, template.getBaselineResponse(),
                         response, statusCode);
             }
+        } catch (ProxyTransport.RequestCancelledException ex) {
+            requestCancelled = true;
         } catch (IOException ex) {
             error = proxyErrorMessage(ex, transportConfig);
         } catch (RuntimeException ex) {
             error = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
+        } finally {
+            if (proxyCancellation != null) {
+                activeProxyRequest.compareAndSet(proxyCancellation, null);
+            }
+        }
+        if (requestCancelled) {
+            if (proxyTraceId != null) {
+                proxyHighlightSupport.complete(proxyTraceId, false, hitHighlightColor);
+            }
+            return null;
         }
         long elapsedMillis = Math.max(0L, (System.nanoTime() - started) / 1000000L);
         if (response != null && error == null) {
@@ -1941,6 +1979,28 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 responseLength, elapsedMillis, System.currentTimeMillis(), maxResponseBytes);
         int score = scoreResult(statusCode, elapsedMillis, hitMatch, responseDiff, error);
         return new RunnerResult(template, historyRecord, hitMatch, responseDiff.summary(), score, error);
+    }
+
+    private RunnerResult sendPayloadWithRetry(RequestTemplate template,
+            PayloadInsertionPoint insertionPoint, String category, String payload,
+            EncodingStrategy encodingStrategy, List<HitRule> hitRules, int variantIndex,
+            int maxResponseBytes, TransportConfig transportConfig,
+            HitHighlightColor hitHighlightColor) {
+        while (true) {
+            if (!waitIfPaused()) {
+                return null;
+            }
+            RunnerResult result = sendPayload(template, insertionPoint, category, payload,
+                    encodingStrategy, hitRules, variantIndex, maxResponseBytes,
+                    transportConfig, hitHighlightColor);
+            if (result != null) {
+                return result;
+            }
+            SwingWorker<Void, RunnerResult> worker = activeWorker;
+            if (worker != null && worker.isCancelled()) {
+                return null;
+            }
+        }
     }
 
     private HitHighlightColor selectedHitHighlightColor() {
@@ -2105,8 +2165,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 pauseLock.notifyAll();
             }
         }
+        if (paused) {
+            cancelActiveProxyRequest();
+        }
         pauseButton.setText(paused ? "继续" : "暂停");
-        statusLabel.setText(paused ? "任务已暂停。" : "任务已继续。" );
+        statusLabel.setText(paused
+                ? "任务已暂停；Proxy 当前请求已中断并将在继续后重试，直接发送需等待当前请求返回。"
+                : "任务已继续。" );
     }
 
     private void resumeIfPaused() {
@@ -2129,6 +2194,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             }
         }
         return activeWorker == null || !activeWorker.isCancelled();
+    }
+
+    private void cancelActiveProxyRequest() {
+        ProxyTransport.Cancellation cancellation = activeProxyRequest.get();
+        if (cancellation != null) {
+            cancellation.cancel();
+        }
     }
 
     private boolean waitForRateLimit(RateLimit rateLimit) {

@@ -35,19 +35,39 @@ final class ProxyTransport {
 
     static byte[] send(IHttpService targetService, byte[] request, String proxyHost,
             int proxyPort, X509Certificate proxyCa) throws IOException {
+        return send(targetService, request, proxyHost, proxyPort, proxyCa, new Cancellation());
+    }
+
+    static byte[] send(IHttpService targetService, byte[] request, String proxyHost,
+            int proxyPort, X509Certificate proxyCa, Cancellation cancellation) throws IOException {
         validate(targetService, request, proxyHost, proxyPort);
+        if (cancellation == null) {
+            cancellation = new Cancellation();
+        }
+        cancellation.throwIfCancelled();
         Socket proxySocket = new Socket();
         try {
+            cancellation.register(proxySocket);
             proxySocket.connect(new InetSocketAddress(normalizedHost(proxyHost), proxyPort),
                     CONNECT_TIMEOUT_MILLIS);
+            cancellation.throwIfCancelled();
             proxySocket.setSoTimeout(READ_TIMEOUT_MILLIS);
             if (isHttps(targetService)) {
-                return sendHttps(proxySocket, targetService, request, proxyCa);
+                return sendHttps(proxySocket, targetService, request, proxyCa, cancellation);
             }
             return sendHttp(proxySocket, targetService, request);
         } catch (SocketTimeoutException ex) {
+            if (cancellation.isCancelled()) {
+                throw new RequestCancelledException();
+            }
             throw new IOException("连接或读取 Proxy 超时。", ex);
+        } catch (IOException ex) {
+            if (cancellation.isCancelled()) {
+                throw new RequestCancelledException();
+            }
+            throw ex;
         } finally {
+            cancellation.unregister(proxySocket);
             closeQuietly(proxySocket);
         }
     }
@@ -62,7 +82,7 @@ final class ProxyTransport {
     }
 
     private static byte[] sendHttps(Socket proxySocket, IHttpService targetService,
-            byte[] request, X509Certificate proxyCa) throws IOException {
+            byte[] request, X509Certificate proxyCa, Cancellation cancellation) throws IOException {
         String host = normalizedHost(targetService.getHost());
         String authority = authority(host, targetService.getPort());
         String connectRequest = "CONNECT " + authority + " HTTP/1.1\r\n"
@@ -84,6 +104,8 @@ final class ProxyTransport {
         SSLSocket tlsSocket = (SSLSocket) factory.createSocket(proxySocket, host,
                 targetService.getPort(), true);
         try {
+            cancellation.register(tlsSocket);
+            cancellation.throwIfCancelled();
             tlsSocket.setSoTimeout(READ_TIMEOUT_MILLIS);
             SSLParameters parameters = tlsSocket.getSSLParameters();
             parameters.setEndpointIdentificationAlgorithm("HTTPS");
@@ -102,6 +124,7 @@ final class ProxyTransport {
             output.flush();
             return readResponse(tlsSocket.getInputStream(), requestMethod(request));
         } finally {
+            cancellation.unregister(tlsSocket);
             closeQuietly(tlsSocket);
         }
     }
@@ -397,6 +420,46 @@ final class ProxyTransport {
             socket.close();
         } catch (IOException ignored) {
             // Best effort only.
+        }
+    }
+
+    static final class Cancellation {
+        private boolean cancelled;
+        private Socket socket;
+
+        synchronized void register(Socket activeSocket) throws RequestCancelledException {
+            if (cancelled) {
+                closeQuietly(activeSocket);
+                throw new RequestCancelledException();
+            }
+            socket = activeSocket;
+        }
+
+        synchronized void unregister(Socket activeSocket) {
+            if (socket == activeSocket) {
+                socket = null;
+            }
+        }
+
+        synchronized void cancel() {
+            cancelled = true;
+            closeQuietly(socket);
+        }
+
+        synchronized boolean isCancelled() {
+            return cancelled;
+        }
+
+        synchronized void throwIfCancelled() throws RequestCancelledException {
+            if (cancelled) {
+                throw new RequestCancelledException();
+            }
+        }
+    }
+
+    static final class RequestCancelledException extends IOException {
+        private RequestCancelledException() {
+            super("Proxy 请求已取消。");
         }
     }
 

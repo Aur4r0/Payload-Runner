@@ -14,8 +14,10 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Arrays;
 
 final class ProxyHighlightSupport implements IProxyListener {
+    private static final String EDITED_HEADER = "X-Payload-Runner-Edited: 1";
     private final IBurpExtenderCallbacks callbacks;
     private final Map<String, PendingMessage> active =
             new LinkedHashMap<String, PendingMessage>();
@@ -64,6 +66,7 @@ final class ProxyHighlightSupport implements IProxyListener {
             for (PendingMessage pending : active.values()) {
                 if (pending.message == null && pending.signature.equals(actualSignature)) {
                     pending.message = messageInfo;
+                    markEdited(messageInfo);
                     return;
                 }
             }
@@ -156,6 +159,44 @@ final class ProxyHighlightSupport implements IProxyListener {
         return exception.getMessage() == null
                 ? exception.getClass().getSimpleName()
                 : exception.getMessage();
+    }
+
+    private void markEdited(IHttpRequestResponse message) {
+        try {
+            byte[] request = message.getRequest();
+            if (request != null) {
+                message.setRequest(withEditedHeader(request));
+            }
+        } catch (RuntimeException ex) {
+            callbacks.printError("标记 Proxy 请求为 Edited 失败：" + safeMessage(ex));
+        }
+    }
+
+    private static byte[] withEditedHeader(byte[] request) {
+        String text = new String(request, StandardCharsets.ISO_8859_1);
+        int headerEnd = text.indexOf("\r\n\r\n");
+        String separator = "\r\n";
+        if (headerEnd < 0) {
+            headerEnd = text.indexOf("\n\n");
+            separator = "\n";
+        }
+        if (headerEnd < 0) {
+            return Arrays.copyOf(request, request.length);
+        }
+
+        String headerBlock = text.substring(0, headerEnd);
+        String[] lines = headerBlock.split("\\r?\\n", -1);
+        for (String line : lines) {
+            int colon = line.indexOf(':');
+            if (colon > 0 && "x-payload-runner-edited".equalsIgnoreCase(
+                    line.substring(0, colon).trim())) {
+                return Arrays.copyOf(request, request.length);
+            }
+        }
+
+        String modified = text.substring(0, headerEnd) + separator + EDITED_HEADER
+                + text.substring(headerEnd);
+        return modified.getBytes(StandardCharsets.ISO_8859_1);
     }
 
     private static final class PendingMessage {

@@ -37,6 +37,9 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -57,11 +60,15 @@ public final class SmokeTest {
         testYamlParser();
         testDefaultPayloadResource();
         testQueryInsertionPoints();
+        testPathInsertionPoints();
+        testHeaderInsertionPoints();
         testEncodingStrategies();
         testRateLimitDefaultsAndDelays();
         testTransportConfigDefaultsAndValidation();
         testProxyTlsTrustCertificate();
         testProxyTransportHttp();
+        testProxyCancellationInterruptsBlockedRequest();
+        testPauseAndStopCancelActiveProxyRequest();
         testProxyTransportHttpsConnectFailure();
         testProxyFailureDoesNotStopNextPayload();
         testRequestTemplateAcceptsUrlMarkerWithoutBody();
@@ -142,6 +149,55 @@ public final class SmokeTest {
         String secondRequest = helpers.bytesToString(points.get(1).buildRequest("x/y"));
         assertContains(secondRequest, "POST /submit?name=pre*post&encoded=x%2Fy HTTP/1.1",
                 "decoded query replacement");
+    }
+
+    private static void testPathInsertionPoints() {
+        FakeHelpers helpers = new FakeHelpers();
+        List<String> headers = Arrays.asList(
+                "GET /api/users/parameter*/detail?id=* HTTP/1.1",
+                "Host: example.test");
+        List<PathInsertionPoint> points = PathInsertionPoint.fromRequestLine(helpers, headers, "");
+        assertEquals(1, points.size(), "path marker count");
+        assertEquals("url:path[3]", points.get(0).getName(), "path marker name");
+        String request = helpers.bytesToString(points.get(0)
+                .buildRequest("A/B", EncodingStrategy.URL_ENCODE));
+        assertContains(request, "GET /api/users/parameterA%2FB/detail?id=* HTTP/1.1",
+                "path marker replacement keeps query");
+
+        List<String> absoluteHeaders = Arrays.asList(
+                "GET http://example.test/root/%2A/end?next=* HTTP/1.1",
+                "Host: example.test");
+        List<PathInsertionPoint> encodedPoints = PathInsertionPoint.fromRequestLine(
+                helpers, absoluteHeaders, "");
+        assertEquals(1, encodedPoints.size(), "encoded absolute path marker count");
+        String encodedRequest = helpers.bytesToString(encodedPoints.get(0)
+                .buildRequest("value", EncodingStrategy.URL_ENCODE));
+        assertContains(encodedRequest,
+                "GET http://example.test/root/value/end?next=* HTTP/1.1",
+                "encoded absolute path marker replacement");
+    }
+
+    private static void testHeaderInsertionPoints() {
+        FakeHelpers helpers = new FakeHelpers();
+        List<String> headers = Arrays.asList(
+                "POST /submit HTTP/1.1",
+                "Host: example.test",
+                "X-Test: pre*post",
+                "Cookie: session=*",
+                "Content-Length: *");
+        List<HeaderInsertionPoint> points = HeaderInsertionPoint.fromHeaders(
+                helpers, headers, "body");
+        assertEquals(2, points.size(), "header marker count");
+        assertEquals("header:X-Test", points.get(0).getName(), "header marker name");
+        String firstRequest = helpers.bytesToString(points.get(0)
+                .buildRequest("payload", EncodingStrategy.RAW));
+        assertContains(firstRequest, "X-Test: prepayloadpost", "header marker replacement");
+        assertContains(firstRequest, "Cookie: session=*", "other header marker preserved");
+
+        String secondRequest = helpers.bytesToString(points.get(1)
+                .buildRequest("a/b", EncodingStrategy.URL_ENCODE));
+        assertContains(secondRequest, "Cookie: session=a%2Fb",
+                "header marker encoding strategy");
     }
 
     private static void testEncodingStrategies() {
@@ -355,6 +411,83 @@ public final class SmokeTest {
                 "HTTP proxy body preserved");
         assertContains(new String(response, StandardCharsets.ISO_8859_1), "\r\n\r\nOK",
                 "HTTP proxy response returned");
+    }
+
+    private static void testProxyCancellationInterruptsBlockedRequest() throws Exception {
+        final ServerSocket server = new ServerSocket(0);
+        final CountDownLatch accepted = new CountDownLatch(1);
+        final Throwable[] serverError = new Throwable[1];
+        Thread serverThread = new Thread(() -> {
+            try (Socket socket = server.accept()) {
+                accepted.countDown();
+                while (socket.getInputStream().read() >= 0) {
+                    // Wait until the client-side cancellation closes the socket.
+                }
+            } catch (Throwable ex) {
+                serverError[0] = ex;
+            }
+        }, "fake-blocked-proxy");
+        serverThread.start();
+
+        ProxyTransport.Cancellation cancellation = new ProxyTransport.Cancellation();
+        Throwable[] clientError = new Throwable[1];
+        Thread clientThread = new Thread(() -> {
+            try {
+                ProxyTransport.send(new FakeHttpService("example.test", 80, "http"),
+                        "GET / HTTP/1.1\r\nHost: example.test\r\n\r\n"
+                                .getBytes(StandardCharsets.ISO_8859_1),
+                        "127.0.0.1", server.getLocalPort(), null, cancellation);
+            } catch (Throwable ex) {
+                clientError[0] = ex;
+            }
+        }, "proxy-cancellation-client");
+        clientThread.start();
+        assertEquals(true, accepted.await(2, TimeUnit.SECONDS), "blocked proxy accepted");
+        cancellation.cancel();
+        clientThread.join(2000L);
+        serverThread.join(2000L);
+        server.close();
+        assertThreadFinished(clientThread, null, "cancelled proxy client");
+        assertThreadFinished(serverThread, serverError[0], "blocked proxy server");
+        assertEquals(true, clientError[0] instanceof ProxyTransport.RequestCancelledException,
+                "cancelled proxy reports cancellation");
+    }
+
+    private static void testPauseAndStopCancelActiveProxyRequest() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                SwingWorker<Void, RunnerResult> worker = new SwingWorker<Void, RunnerResult>() {
+                    @Override
+                    protected Void doInBackground() {
+                        return null;
+                    }
+                };
+                setPrivateField(panel, "activeWorker", worker);
+                ((JButton) privateField(panel, "pauseButton")).setEnabled(true);
+                ((JButton) privateField(panel, "stopButton")).setEnabled(true);
+                AtomicReference<ProxyTransport.Cancellation> active =
+                        (AtomicReference<ProxyTransport.Cancellation>) privateField(
+                                panel, "activeProxyRequest");
+                ProxyTransport.Cancellation pauseCancellation =
+                        new ProxyTransport.Cancellation();
+                active.set(pauseCancellation);
+                ((JButton) privateField(panel, "pauseButton")).doClick();
+                assertEquals(true, pauseCancellation.isCancelled(),
+                        "pause cancels active proxy request");
+
+                ProxyTransport.Cancellation stopCancellation =
+                        new ProxyTransport.Cancellation();
+                active.set(stopCancellation);
+                ((JButton) privateField(panel, "stopButton")).doClick();
+                assertEquals(true, stopCancellation.isCancelled(),
+                        "stop cancels active proxy request");
+                assertEquals(true, worker.isCancelled(), "stop cancels worker");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
     }
 
     private static void testProxyTransportHttpsConnectFailure() throws Exception {
@@ -642,8 +775,13 @@ public final class SmokeTest {
         String traceId = support.begin(service, original);
         FakeMessage message = new FakeMessage(original, service, null);
         support.processProxyMessage(true, new FakeInterceptedProxyMessage(message));
-        assertEquals(true, Arrays.equals(original, message.getRequest()),
-                "proxy request bytes remain unchanged");
+        assertContains(new String(message.getRequest(), StandardCharsets.ISO_8859_1),
+                "POST /submit HTTP/1.1", "proxy request line preserved");
+        assertContains(new String(message.getRequest(), StandardCharsets.ISO_8859_1),
+                "BODY", "proxy request body preserved");
+        assertEquals(true, message.isEdited(), "proxy request marked Edited");
+        assertContains(new String(message.getRequest(), StandardCharsets.ISO_8859_1),
+                "X-Payload-Runner-Edited: 1", "proxy Edited header added");
         support.complete(traceId, true, HitHighlightColor.ORANGE);
         assertEquals("orange", message.getHighlight(), "proxy history hit highlighted");
 
@@ -651,6 +789,9 @@ public final class SmokeTest {
         FakeMessage noHitMessage = new FakeMessage(original, service, null);
         support.processProxyMessage(true, new FakeInterceptedProxyMessage(noHitMessage));
         support.complete(noHitTrace, false, HitHighlightColor.RED);
+        assertEquals(true, noHitMessage.isEdited(), "non-hit proxy request marked Edited");
+        assertContains(new String(noHitMessage.getRequest(), StandardCharsets.ISO_8859_1),
+                "X-Payload-Runner-Edited: 1", "non-hit Edited header added");
         assertEquals(null, noHitMessage.getHighlight(), "non-hit proxy request not highlighted");
     }
 
@@ -713,6 +854,10 @@ public final class SmokeTest {
         assertThreadFinished(proxyThread, serverError[0], "highlight fake proxy");
         assertContains(result[0].getHitMatch(), "keyword:SQL syntax",
                 "proxy response hit detected");
+        assertEquals(true, proxyMessage[0].isEdited(),
+                "proxy history message marked Edited");
+        assertContains(new String(proxyMessage[0].getRequest(), StandardCharsets.ISO_8859_1),
+                "X-Payload-Runner-Edited: 1", "proxy history Edited header added");
         assertEquals("orange", proxyMessage[0].getHighlight(),
                 "proxy history message highlighted after hit");
         assertContains(new String(proxyMessage[0].getRequest(), StandardCharsets.ISO_8859_1),
@@ -1696,6 +1841,12 @@ public final class SmokeTest {
         return field.get(target);
     }
 
+    private static void setPrivateField(Object target, String name, Object value) throws Exception {
+        Field field = target.getClass().getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(target, value);
+    }
+
     private static Object invokePrivate(Object target, String name, Class<?>[] types,
             Object... args) throws Exception {
         Method method = target.getClass().getDeclaredMethod(name, types);
@@ -1954,10 +2105,11 @@ public final class SmokeTest {
     }
 
     private static final class FakeMessage implements IHttpRequestResponse {
-        private final byte[] request;
+        private byte[] request;
         private final byte[] response;
         private final IHttpService service;
         private String highlight;
+        private boolean edited;
 
         private FakeMessage(byte[] request) {
             this(request, new FakeHttpService());
@@ -2031,6 +2183,12 @@ public final class SmokeTest {
         }
 
         @Override
+        public void setRequest(byte[] newRequest) {
+            request = newRequest;
+            edited = true;
+        }
+
+        @Override
         public byte[] getResponse() {
             return response;
         }
@@ -2048,6 +2206,10 @@ public final class SmokeTest {
         @Override
         public void setHighlight(String color) {
             highlight = color;
+        }
+
+        boolean isEdited() {
+            return edited;
         }
     }
 

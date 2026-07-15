@@ -51,7 +51,9 @@ final class RequestTemplate {
         String body = extractBody(helpers, request, requestInfo.getBodyOffset());
 
         List<PayloadInsertionPoint> insertionPoints = new ArrayList<PayloadInsertionPoint>();
+        insertionPoints.addAll(PathInsertionPoint.fromRequestLine(helpers, headers, body));
         insertionPoints.addAll(QueryInsertionPoint.fromRequestLine(helpers, headers, body));
+        insertionPoints.addAll(HeaderInsertionPoint.fromHeaders(helpers, headers, body));
 
         BodyKind bodyKind = BodyKind.UNSUPPORTED;
         if (!body.trim().isEmpty()) {
@@ -184,18 +186,35 @@ final class RequestTemplate {
     private static String bodyLabel(BodyKind bodyKind, String body,
             List<PayloadInsertionPoint> insertionPoints) {
         boolean hasUrlMarkers = false;
+        boolean hasHeaderMarkers = false;
         for (PayloadInsertionPoint insertionPoint : insertionPoints) {
             if (insertionPoint.getName().startsWith("url:")) {
                 hasUrlMarkers = true;
-                break;
+            } else if (insertionPoint.getName().startsWith("header:")) {
+                hasHeaderMarkers = true;
             }
         }
+        String markerLabel = markerLabel(hasUrlMarkers, hasHeaderMarkers);
         if (body.trim().isEmpty()) {
-            return hasUrlMarkers ? "URL 查询参数" : "无请求体";
+            return markerLabel.isEmpty() ? "无请求体" : markerLabel;
         }
         if (bodyKind == BodyKind.UNSUPPORTED) {
-            return hasUrlMarkers ? "URL 查询参数 + 暂不支持的请求体" : "暂不支持的请求体";
+            return markerLabel.isEmpty()
+                    ? "暂不支持的请求体"
+                    : markerLabel + " + 暂不支持的请求体";
         }
-        return hasUrlMarkers ? "URL 查询参数 + " + bodyKind.getLabel() : bodyKind.getLabel();
+        return markerLabel.isEmpty()
+                ? bodyKind.getLabel()
+                : markerLabel + " + " + bodyKind.getLabel();
+    }
+
+    private static String markerLabel(boolean hasUrlMarkers, boolean hasHeaderMarkers) {
+        if (hasUrlMarkers && hasHeaderMarkers) {
+            return "URL + Header";
+        }
+        if (hasUrlMarkers) {
+            return "URL";
+        }
+        return hasHeaderMarkers ? "Header" : "";
     }
 }

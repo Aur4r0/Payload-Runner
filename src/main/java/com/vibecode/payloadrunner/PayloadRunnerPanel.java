@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -66,6 +68,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private static final String MAX_RESPONSE_KB_SETTING = "maxResponseKb";
     private static final String REPEATER_PREFIX_SETTING = "repeaterPrefix";
     private static final String FOLLOW_LATEST_SETTING = "followLatest";
+    private static final String TRAFFIC_DESTINATION_SETTING = "trafficDestination";
+    private static final String PROXY_HOST_SETTING = "proxyHost";
+    private static final String PROXY_PORT_SETTING = "proxyPort";
+    private static final String PROXY_CA_SETTING = "proxyCaCertificate";
     private static final String PROFILE_INDEX_SETTING = "profileIndex";
     private static final String PROFILE_SETTING_PREFIX = "profile.";
     private static final String DEFAULT_YAML = DefaultPayloads.load();
@@ -98,6 +104,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JButton exportMessagesButton = new JButton("导出报文");
     private final JButton saveProfileButton = new JButton("保存配置");
     private final JButton loadProfileButton = new JButton("加载配置");
+    private final JButton fetchProxyCaButton = new JButton("从 Proxy 获取 CA...");
+    private final JButton importProxyCaButton = new JButton("导入 Burp CA...");
+    private final JButton clearProxyCaButton = new JButton("清除 CA");
     private final JButton saveRulesButton = new JButton("保存规则");
     private final JButton resetRulesButton = new JButton("重置规则");
     private final JButton applyRuleTemplateButton = new JButton("应用模板");
@@ -114,10 +123,16 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             new JComboBox<EncodingStrategy>(EncodingStrategy.values());
     private final JComboBox<RateLimit> rateLimitCombo =
             new JComboBox<RateLimit>(RateLimit.values());
+    private final JComboBox<TrafficDestination> trafficDestinationCombo =
+            new JComboBox<TrafficDestination>(TrafficDestination.values());
     private final JComboBox<String> endpointCombo = new JComboBox<String>();
     private final JComboBox<String> profileCombo = new JComboBox<String>();
     private final JTextField maxHistoryField = new JTextField("500", 4);
     private final JTextField maxResponseKbField = new JTextField("1024", 5);
+    private final JTextField proxyHostField =
+            new JTextField(TransportConfig.DEFAULT_PROXY_HOST, 10);
+    private final JTextField proxyPortField =
+            new JTextField(Integer.toString(TransportConfig.DEFAULT_PROXY_PORT), 5);
     private final JTextField repeaterCaptionPrefixField = new JTextField(10);
     private final JTextField keywordField = new JTextField(24);
     private final JTextField resultFilterField = new JTextField(16);
@@ -130,6 +145,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JComboBox<HitRuleTemplate> hitRuleTemplateCombo =
             new JComboBox<HitRuleTemplate>(HitRuleTemplate.values());
     private final JLabel resultSummaryLabel = new JLabel("结果：0");
+    private final JLabel proxyCaStatusLabel = new JLabel("未导入（HTTPS 使用 JVM 信任库）");
     private final JLabel historyPositionLabel = new JLabel("#000 / 0");
     private final JLabel historyCategoryLabel = new JLabel("分类：-");
     private final JLabel historyParamLabel = new JLabel("参数：-");
@@ -145,6 +161,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private HistoryRecord currentHistoryRecord;
     private boolean updatingEndpointCombo;
     private volatile boolean paused;
+    private X509Certificate proxyCaCertificate;
+    private SwingWorker<X509Certificate, Void> proxyCaWorker;
 
     PayloadRunnerPanel(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers) {
         super(new BorderLayout(8, 8));
@@ -275,6 +293,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         sideSplit.setPreferredSize(new Dimension(560, 520));
 
         JPanel configButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        JPanel trafficButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        JPanel tlsButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         JPanel runButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         JPanel runnerControlPanel = new JPanel(new BorderLayout(0, 4));
         pauseButton.setEnabled(false);
@@ -293,6 +313,18 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         configButtonRow.add(maxResponseKbField);
         configButtonRow.add(new JLabel("命中关键词"));
         configButtonRow.add(keywordField);
+        trafficDestinationCombo.setSelectedItem(TrafficDestination.DIRECT);
+        trafficButtonRow.add(new JLabel("流量去向"));
+        trafficButtonRow.add(trafficDestinationCombo);
+        trafficButtonRow.add(new JLabel("Proxy 地址"));
+        trafficButtonRow.add(proxyHostField);
+        trafficButtonRow.add(new JLabel("Proxy 端口"));
+        trafficButtonRow.add(proxyPortField);
+        tlsButtonRow.add(new JLabel("HTTPS 证书"));
+        tlsButtonRow.add(fetchProxyCaButton);
+        tlsButtonRow.add(importProxyCaButton);
+        tlsButtonRow.add(clearProxyCaButton);
+        tlsButtonRow.add(proxyCaStatusLabel);
         runButtonRow.add(runButton);
         runButtonRow.add(clearRequestsButton);
         runButtonRow.add(new JLabel("接口配置"));
@@ -300,8 +332,12 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         runButtonRow.add(profileCombo);
         runButtonRow.add(saveProfileButton);
         runButtonRow.add(loadProfileButton);
-        runnerControlPanel.add(configButtonRow, BorderLayout.NORTH);
-        runnerControlPanel.add(runButtonRow, BorderLayout.SOUTH);
+        JPanel configRows = new JPanel(new java.awt.GridLayout(0, 1, 0, 4));
+        configRows.add(configButtonRow);
+        configRows.add(trafficButtonRow);
+        configRows.add(tlsButtonRow);
+        configRows.add(runButtonRow);
+        runnerControlPanel.add(configRows, BorderLayout.CENTER);
 
         JPanel runnerPage = new JPanel(new BorderLayout(6, 6));
         JSplitPane configSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, yamlPanel, sideSplit);
@@ -417,6 +453,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resetRulesButton.addActionListener(event -> resetRules());
         selectAllCategoriesButton.addActionListener(event -> selectAllCategories());
         clearCategoriesButton.addActionListener(event -> clearCategorySelection());
+        trafficDestinationCombo.addActionListener(event -> updateProxyFieldsEnabled());
+        fetchProxyCaButton.addActionListener(event -> fetchProxyCa());
+        importProxyCaButton.addActionListener(event -> importProxyCa());
+        clearProxyCaButton.addActionListener(event -> clearProxyCa());
         runButton.addActionListener(event -> runSelectedCategories());
         saveProfileButton.addActionListener(event -> saveCurrentProfile());
         loadProfileButton.addActionListener(event -> loadSelectedProfile());
@@ -1058,6 +1098,19 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         if (savedFollowLatest != null && !savedFollowLatest.trim().isEmpty()) {
             followLatestCheckBox.setSelected(Boolean.parseBoolean(savedFollowLatest));
         }
+
+        trafficDestinationCombo.setSelectedItem(TrafficDestination.fromSetting(
+                callbacks.loadExtensionSetting(TRAFFIC_DESTINATION_SETTING)));
+        String savedProxyHost = callbacks.loadExtensionSetting(PROXY_HOST_SETTING);
+        if (savedProxyHost != null && !savedProxyHost.trim().isEmpty()) {
+            proxyHostField.setText(savedProxyHost.trim());
+        }
+        String savedProxyPort = callbacks.loadExtensionSetting(PROXY_PORT_SETTING);
+        if (savedProxyPort != null && !savedProxyPort.trim().isEmpty()) {
+            proxyPortField.setText(savedProxyPort.trim());
+        }
+        loadProxyCaSetting();
+        updateProxyFieldsEnabled();
         loadProfilesIntoCombo();
     }
 
@@ -1073,6 +1126,12 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         callbacks.saveExtensionSetting(REPEATER_PREFIX_SETTING, repeaterCaptionPrefixField.getText());
         callbacks.saveExtensionSetting(FOLLOW_LATEST_SETTING,
                 Boolean.toString(followLatestCheckBox.isSelected()));
+        TrafficDestination destination =
+                (TrafficDestination) trafficDestinationCombo.getSelectedItem();
+        callbacks.saveExtensionSetting(TRAFFIC_DESTINATION_SETTING,
+                destination == null ? TrafficDestination.DIRECT.name() : destination.name());
+        callbacks.saveExtensionSetting(PROXY_HOST_SETTING, proxyHostField.getText().trim());
+        callbacks.saveExtensionSetting(PROXY_PORT_SETTING, proxyPortField.getText().trim());
     }
 
     private void loadProfilesIntoCombo() {
@@ -1084,6 +1143,149 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
         if (selected != null && endpointKeys.contains(selected.toString())) {
             profileCombo.setSelectedItem(selected.toString());
+        }
+    }
+
+    private void updateProxyFieldsEnabled() {
+        boolean enabled = trafficDestinationCombo.isEnabled()
+                && trafficDestinationCombo.getSelectedItem() == TrafficDestination.BURP_PROXY;
+        proxyHostField.setEnabled(enabled);
+        proxyPortField.setEnabled(enabled);
+        boolean caIdle = proxyCaWorker == null || proxyCaWorker.isDone();
+        fetchProxyCaButton.setEnabled(enabled && caIdle);
+        importProxyCaButton.setEnabled(enabled && caIdle);
+        clearProxyCaButton.setEnabled(enabled && caIdle && proxyCaCertificate != null);
+    }
+
+    private TransportConfig parseTransportConfig() {
+        try {
+            return TransportConfig.parse(
+                    (TrafficDestination) trafficDestinationCombo.getSelectedItem(),
+                    proxyHostField.getText(), proxyPortField.getText())
+                    .withProxyCa(proxyCaCertificate);
+        } catch (IllegalArgumentException ex) {
+            statusLabel.setText(ex.getMessage());
+            return null;
+        }
+    }
+
+    private void loadProxyCaSetting() {
+        String saved = callbacks.loadExtensionSetting(PROXY_CA_SETTING);
+        try {
+            proxyCaCertificate = ProxyTlsTrust.decode(saved);
+        } catch (IOException ex) {
+            proxyCaCertificate = null;
+            callbacks.printError("加载 Burp CA 失败：" + truncateStatus(ex.getMessage()));
+        }
+        updateProxyCaStatus();
+    }
+
+    private void importProxyCa() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("选择从 Burp 导出的 CA 证书");
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File selected = chooser.getSelectedFile();
+        try {
+            X509Certificate certificate = ProxyTlsTrust.parse(
+                    Files.readAllBytes(selected.toPath()));
+            confirmAndSaveProxyCa(certificate);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "导入 Burp CA 失败",
+                    JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void fetchProxyCa() {
+        final TransportConfig config;
+        try {
+            config = TransportConfig.parse(TrafficDestination.BURP_PROXY,
+                    proxyHostField.getText(), proxyPortField.getText());
+        } catch (IllegalArgumentException ex) {
+            statusLabel.setText(ex.getMessage());
+            return;
+        }
+        if (proxyCaWorker != null && !proxyCaWorker.isDone()) {
+            return;
+        }
+        statusLabel.setText("正在从 " + config.getProxyHost() + ":" + config.getProxyPort()
+                + " 获取 Burp CA……");
+        runButton.setEnabled(false);
+        proxyCaWorker = new SwingWorker<X509Certificate, Void>() {
+            @Override
+            protected X509Certificate doInBackground() throws Exception {
+                return ProxyTlsTrust.fetchFromProxy(config.getProxyHost(), config.getProxyPort());
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    confirmAndSaveProxyCa(get());
+                } catch (Exception ex) {
+                    Throwable cause = ex instanceof java.util.concurrent.ExecutionException
+                            && ex.getCause() != null ? ex.getCause() : ex;
+                    String message = cause.getMessage() == null
+                            ? cause.getClass().getSimpleName()
+                            : cause.getMessage();
+                    JOptionPane.showMessageDialog(PayloadRunnerPanel.this, message,
+                            "获取 Burp CA 失败", JOptionPane.ERROR_MESSAGE);
+                    statusLabel.setText("获取 Burp CA 失败：" + truncateStatus(message));
+                } finally {
+                    runButton.setEnabled(!isRunnerActive());
+                    updateProxyFieldsEnabled();
+                }
+            }
+        };
+        updateProxyFieldsEnabled();
+        proxyCaWorker.execute();
+    }
+
+    private boolean confirmAndSaveProxyCa(X509Certificate certificate) throws IOException {
+        String fingerprint = ProxyTlsTrust.fingerprint(certificate);
+        String message = "证书主题：" + certificate.getSubjectX500Principal().getName()
+                + "\nSHA-256：" + fingerprint
+                + "\n\n该 CA 仅用于 Payload Runner 经 Proxy 发送的 HTTPS 请求，"
+                + "不会修改 JVM 全局信任库。是否信任？";
+        if (JOptionPane.showConfirmDialog(this, message, "确认信任 Burp CA",
+                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE)
+                != JOptionPane.YES_OPTION) {
+            statusLabel.setText("已取消信任该 Burp CA。");
+            return false;
+        }
+        proxyCaCertificate = certificate;
+        callbacks.saveExtensionSetting(PROXY_CA_SETTING,
+                ProxyTlsTrust.encode(certificate));
+        updateProxyCaStatus();
+        updateProxyFieldsEnabled();
+        statusLabel.setText("已信任 Burp CA，HTTPS Proxy 请求将继续校验真实目标主机名。");
+        return true;
+    }
+
+    private void clearProxyCa() {
+        proxyCaCertificate = null;
+        callbacks.saveExtensionSetting(PROXY_CA_SETTING, "");
+        updateProxyCaStatus();
+        updateProxyFieldsEnabled();
+        statusLabel.setText("已清除导入的 Burp CA，HTTPS 将恢复使用 JVM 默认信任库。");
+    }
+
+    private void updateProxyCaStatus() {
+        if (proxyCaCertificate == null) {
+            proxyCaStatusLabel.setText("未导入（HTTPS 使用 JVM 信任库）");
+            proxyCaStatusLabel.setToolTipText(null);
+            return;
+        }
+        try {
+            String fingerprint = ProxyTlsTrust.fingerprint(proxyCaCertificate);
+            String shortFingerprint = fingerprint.length() > 23
+                    ? fingerprint.substring(0, 23) + "..."
+                    : fingerprint;
+            proxyCaStatusLabel.setText("已信任：" + shortFingerprint);
+            proxyCaStatusLabel.setToolTipText("SHA-256 " + fingerprint);
+        } catch (IOException ex) {
+            proxyCaStatusLabel.setText("已导入 Burp CA");
+            proxyCaStatusLabel.setToolTipText(null);
         }
     }
 
@@ -1111,6 +1313,12 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         profile.setProperty("rules", rulesArea.getText());
         profile.setProperty("repeaterPrefix", repeaterCaptionPrefixField.getText());
         profile.setProperty("followLatest", Boolean.toString(followLatestCheckBox.isSelected()));
+        TrafficDestination destination =
+                (TrafficDestination) trafficDestinationCombo.getSelectedItem();
+        profile.setProperty("trafficDestination",
+                destination == null ? TrafficDestination.DIRECT.name() : destination.name());
+        profile.setProperty("proxyHost", proxyHostField.getText().trim());
+        profile.setProperty("proxyPort", proxyPortField.getText().trim());
 
         try {
             StringWriter writer = new StringWriter();
@@ -1162,6 +1370,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         repeaterCaptionPrefixField.setText(profile.getProperty("repeaterPrefix", ""));
         followLatestCheckBox.setSelected(Boolean.parseBoolean(
                 profile.getProperty("followLatest", "true")));
+        trafficDestinationCombo.setSelectedItem(TrafficDestination.fromSetting(
+                profile.getProperty("trafficDestination")));
+        proxyHostField.setText(profile.getProperty("proxyHost",
+                TransportConfig.DEFAULT_PROXY_HOST).trim());
+        proxyPortField.setText(profile.getProperty("proxyPort",
+                Integer.toString(TransportConfig.DEFAULT_PROXY_PORT)).trim());
+        updateProxyFieldsEnabled();
         restoreCategorySelection(splitLines(profile.getProperty("categories", "")));
         saveUiSettings();
         statusLabel.setText("已加载接口配置：" + endpointKey + "。");
@@ -1344,6 +1559,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         if (maxResponseBytes <= 0) {
             return;
         }
+        final TransportConfig transportConfig = parseTransportConfig();
+        if (transportConfig == null) {
+            return;
+        }
         historyStore.setMaxRecordsPerEndpoint(maxHistoryRecords);
         saveUiSettings();
         final List<HitRule> hitRules;
@@ -1412,7 +1631,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                                 int variantIndex = ++attempted;
                                 publish(sendPayload(template, insertionPoint, category, payload,
                                         encodingStrategy, hitRules, variantIndex,
-                                        maxResponseBytes));
+                                        maxResponseBytes, transportConfig));
                             }
                         }
                     }
@@ -1489,6 +1708,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         if (maxResponseBytes <= 0) {
             return;
         }
+        final TransportConfig transportConfig = parseTransportConfig();
+        if (transportConfig == null) {
+            return;
+        }
         historyStore.setMaxRecordsPerEndpoint(maxHistoryRecords);
         saveUiSettings();
 
@@ -1533,7 +1756,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     int variantIndex = ++attempted;
                     publish(sendPayload(variant.template, variant.insertionPoint,
                             variant.category, variant.payload, encodingStrategy, hitRules,
-                            variantIndex, maxResponseBytes));
+                            variantIndex, maxResponseBytes, transportConfig));
                 }
                 return null;
             }
@@ -1600,7 +1823,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
     private RunnerResult sendPayload(RequestTemplate template, PayloadInsertionPoint insertionPoint,
             String category, String payload, EncodingStrategy encodingStrategy,
-            List<HitRule> hitRules, int variantIndex, int maxResponseBytes) {
+            List<HitRule> hitRules, int variantIndex, int maxResponseBytes,
+            TransportConfig transportConfig) {
         byte[] request = insertionPoint.buildRequest(payload, encodingStrategy);
         long started = System.nanoTime();
         byte[] response = null;
@@ -1611,8 +1835,15 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         ResponseDiff responseDiff = ResponseDiff.unavailable();
         String error = null;
         try {
-            IHttpRequestResponse result = callbacks.makeHttpRequest(template.getService(), request);
-            response = result == null ? null : result.getResponse();
+            if (transportConfig.usesProxy()) {
+                response = ProxyTransport.send(template.getService(), request,
+                        transportConfig.getProxyHost(), transportConfig.getProxyPort(),
+                        transportConfig.getProxyCa());
+            } else {
+                IHttpRequestResponse result =
+                        callbacks.makeHttpRequest(template.getService(), request);
+                response = result == null ? null : result.getResponse();
+            }
             if (response != null) {
                 responseLength = response.length;
                 IResponseInfo responseInfo = helpers.analyzeResponse(response);
@@ -1624,6 +1855,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                         new HitRule.MatchInput(responseText, statusCode, responseLength,
                                 responseDiff));
             }
+        } catch (IOException ex) {
+            error = proxyErrorMessage(ex, transportConfig);
         } catch (RuntimeException ex) {
             error = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
         }
@@ -1633,6 +1866,19 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 responseLength, elapsedMillis, System.currentTimeMillis(), maxResponseBytes);
         int score = scoreResult(statusCode, elapsedMillis, hitMatch, responseDiff, error);
         return new RunnerResult(template, historyRecord, hitMatch, responseDiff.summary(), score, error);
+    }
+
+    private String proxyErrorMessage(IOException exception, TransportConfig transportConfig) {
+        if (exception instanceof javax.net.ssl.SSLHandshakeException) {
+            return transportConfig.getProxyCa() == null
+                    ? "Proxy HTTPS TLS 握手失败，请在任务配置中获取或导入 Burp CA。"
+                    : "Proxy HTTPS TLS 握手失败，已导入的 CA 无法验证证书，或证书与目标主机不匹配。";
+        }
+        String message = exception.getMessage();
+        if (message == null || message.trim().isEmpty()) {
+            message = exception.getClass().getSimpleName();
+        }
+        return "Proxy 发送失败：" + truncateStatus(message);
     }
 
     private int parseMaxResponseBytes() {
@@ -1756,6 +2002,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         maxResponseKbField.setEnabled(!running);
         encodingCombo.setEnabled(!running);
         rateLimitCombo.setEnabled(!running);
+        trafficDestinationCombo.setEnabled(!running);
+        updateProxyFieldsEnabled();
         keywordField.setEnabled(!running);
         rulesArea.setEnabled(!running);
         pauseButton.setEnabled(running);

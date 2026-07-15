@@ -13,11 +13,17 @@ import burp.IContextMenuFactory;
 import burp.ITab;
 
 import java.awt.Component;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.UnsupportedEncodingException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.MalformedURLException;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
@@ -51,6 +57,11 @@ public final class SmokeTest {
         testQueryInsertionPoints();
         testEncodingStrategies();
         testRateLimitDefaultsAndDelays();
+        testTransportConfigDefaultsAndValidation();
+        testProxyTlsTrustCertificate();
+        testProxyTransportHttp();
+        testProxyTransportHttpsConnectFailure();
+        testProxyFailureDoesNotStopNextPayload();
         testRequestTemplateAcceptsUrlMarkerWithoutBody();
         testRequestTemplateBuildsMissingService();
         testFormInsertionPoints();
@@ -177,6 +188,271 @@ public final class SmokeTest {
                 throw new RuntimeException(ex);
             }
         });
+    }
+
+    private static void testTransportConfigDefaultsAndValidation() {
+        assertEquals(TrafficDestination.DIRECT, TrafficDestination.fromSetting(null),
+                "default traffic destination");
+        assertEquals(TrafficDestination.DIRECT, TrafficDestination.fromSetting("unknown"),
+                "unknown traffic destination fallback");
+
+        TransportConfig direct = TransportConfig.parse(TrafficDestination.DIRECT, "", "bad");
+        assertEquals(false, direct.usesProxy(), "direct transport selection");
+        assertEquals(TransportConfig.DEFAULT_PROXY_HOST, direct.getProxyHost(),
+                "direct fallback proxy host");
+        assertEquals(TransportConfig.DEFAULT_PROXY_PORT, direct.getProxyPort(),
+                "direct fallback proxy port");
+
+        TransportConfig proxy = TransportConfig.parse(TrafficDestination.BURP_PROXY,
+                "localhost", "9090");
+        assertEquals(true, proxy.usesProxy(), "proxy transport selection");
+        assertEquals("localhost", proxy.getProxyHost(), "parsed proxy host");
+        assertEquals(9090, proxy.getProxyPort(), "parsed proxy port");
+
+        boolean rejected = false;
+        try {
+            TransportConfig.parse(TrafficDestination.BURP_PROXY, "localhost", "70000");
+        } catch (IllegalArgumentException ex) {
+            rejected = true;
+        }
+        assertEquals(true, rejected, "invalid proxy port rejected");
+    }
+
+    private static void testProxyTlsTrustCertificate() throws Exception {
+        javax.net.ssl.TrustManagerFactory factory = javax.net.ssl.TrustManagerFactory.getInstance(
+                javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+        factory.init((java.security.KeyStore) null);
+        java.security.cert.X509Certificate selected = null;
+        for (javax.net.ssl.TrustManager manager : factory.getTrustManagers()) {
+            if (!(manager instanceof javax.net.ssl.X509TrustManager)) {
+                continue;
+            }
+            for (java.security.cert.X509Certificate certificate :
+                    ((javax.net.ssl.X509TrustManager) manager).getAcceptedIssuers()) {
+                try {
+                    certificate.checkValidity();
+                    if (certificate.getBasicConstraints() >= 0) {
+                        selected = certificate;
+                        break;
+                    }
+                } catch (java.security.cert.CertificateException ignored) {
+                    // Try another default trusted CA.
+                }
+            }
+        }
+        if (selected == null) {
+            throw new AssertionError("no current default trusted CA available for TLS trust test");
+        }
+
+        String encoded = ProxyTlsTrust.encode(selected);
+        java.security.cert.X509Certificate decoded = ProxyTlsTrust.decode(encoded);
+        assertEquals(ProxyTlsTrust.fingerprint(selected), ProxyTlsTrust.fingerprint(decoded),
+                "proxy CA persistence fingerprint");
+        assertEquals(true, ProxyTlsTrust.socketFactory(decoded) != null,
+                "proxy CA socket factory");
+        TransportConfig config = TransportConfig.parse(TrafficDestination.BURP_PROXY,
+                "127.0.0.1", "8080").withProxyCa(decoded);
+        assertEquals(true, config.getProxyCa() != null, "transport config carries proxy CA");
+
+        final byte[] certificateBytes = selected.getEncoded();
+        final ServerSocket server = new ServerSocket(0);
+        server.setSoTimeout(5000);
+        final byte[][] captured = new byte[1][];
+        final Throwable[] serverError = new Throwable[1];
+        Thread proxyThread = new Thread(() -> {
+            try (Socket socket = server.accept()) {
+                socket.setSoTimeout(5000);
+                captured[0] = readHttpMessage(socket.getInputStream());
+                OutputStream output = socket.getOutputStream();
+                output.write(("HTTP/1.1 200 OK\r\nContent-Length: "
+                        + certificateBytes.length + "\r\n\r\n")
+                        .getBytes(StandardCharsets.ISO_8859_1));
+                output.write(certificateBytes);
+                output.flush();
+            } catch (Throwable ex) {
+                serverError[0] = ex;
+            }
+        }, "fake-burp-ca-proxy");
+        proxyThread.start();
+        java.security.cert.X509Certificate fetched;
+        try {
+            fetched = ProxyTlsTrust.fetchFromProxy("127.0.0.1", server.getLocalPort());
+        } finally {
+            proxyThread.join(6000L);
+            server.close();
+        }
+        assertThreadFinished(proxyThread, serverError[0], "Burp CA fake proxy");
+        assertContains(new String(captured[0], StandardCharsets.ISO_8859_1),
+                "GET http://burp/cert HTTP/1.1", "Burp CA proxy request target");
+        assertEquals(ProxyTlsTrust.fingerprint(selected), ProxyTlsTrust.fingerprint(fetched),
+                "Burp CA fetched from proxy");
+
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        callbacks.settings.put("proxyCaCertificate", encoded);
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                assertEquals(true, privateField(panel, "proxyCaCertificate") != null,
+                        "saved proxy CA loaded");
+                assertContains(((JLabel) privateField(panel, "proxyCaStatusLabel")).getText(),
+                        "已信任", "saved proxy CA status");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testProxyTransportHttp() throws Exception {
+        final ServerSocket server = new ServerSocket(0);
+        server.setSoTimeout(5000);
+        final byte[][] captured = new byte[1][];
+        final Throwable[] serverError = new Throwable[1];
+        Thread proxyThread = new Thread(() -> {
+            try (Socket socket = server.accept()) {
+                socket.setSoTimeout(5000);
+                captured[0] = readHttpMessage(socket.getInputStream());
+                OutputStream output = socket.getOutputStream();
+                output.write(("HTTP/1.1 200 OK\r\n"
+                        + "Content-Length: 2\r\n"
+                        + "\r\n"
+                        + "OK").getBytes(StandardCharsets.ISO_8859_1));
+                output.flush();
+            } catch (Throwable ex) {
+                serverError[0] = ex;
+            }
+        }, "fake-http-proxy");
+        proxyThread.start();
+
+        byte[] request = ("POST /submit?id=42 HTTP/1.1\r\n"
+                + "Host: example.test:8081\r\n"
+                + "X-Test: keep-me\r\n"
+                + "Content-Length: 4\r\n"
+                + "\r\n"
+                + "BODY").getBytes(StandardCharsets.ISO_8859_1);
+        byte[] response;
+        try {
+            response = ProxyTransport.send(
+                    new FakeHttpService("example.test", 8081, "http"), request,
+                    "127.0.0.1", server.getLocalPort());
+        } finally {
+            proxyThread.join(6000L);
+            server.close();
+        }
+        assertThreadFinished(proxyThread, serverError[0], "HTTP fake proxy");
+        String capturedText = new String(captured[0], StandardCharsets.ISO_8859_1);
+        assertContains(capturedText,
+                "POST http://example.test:8081/submit?id=42 HTTP/1.1",
+                "HTTP proxy absolute request target");
+        assertContains(capturedText, "X-Test: keep-me\r\n", "HTTP proxy header preserved");
+        assertEquals(true, capturedText.endsWith("\r\n\r\nBODY"),
+                "HTTP proxy body preserved");
+        assertContains(new String(response, StandardCharsets.ISO_8859_1), "\r\n\r\nOK",
+                "HTTP proxy response returned");
+    }
+
+    private static void testProxyTransportHttpsConnectFailure() throws Exception {
+        final ServerSocket server = new ServerSocket(0);
+        server.setSoTimeout(5000);
+        final byte[][] captured = new byte[1][];
+        final Throwable[] serverError = new Throwable[1];
+        Thread proxyThread = new Thread(() -> {
+            try (Socket socket = server.accept()) {
+                socket.setSoTimeout(5000);
+                captured[0] = readHttpMessage(socket.getInputStream());
+                OutputStream output = socket.getOutputStream();
+                output.write(("HTTP/1.1 502 Bad Gateway\r\n"
+                        + "Content-Length: 0\r\n"
+                        + "\r\n").getBytes(StandardCharsets.ISO_8859_1));
+                output.flush();
+            } catch (Throwable ex) {
+                serverError[0] = ex;
+            }
+        }, "fake-connect-proxy");
+        proxyThread.start();
+
+        boolean rejected = false;
+        try {
+            ProxyTransport.send(new FakeHttpService("secure.example", 8443, "https"),
+                    "GET /private HTTP/1.1\r\nHost: secure.example:8443\r\n\r\n"
+                            .getBytes(StandardCharsets.ISO_8859_1),
+                    "127.0.0.1", server.getLocalPort());
+        } catch (IOException ex) {
+            rejected = ex.getMessage() != null && ex.getMessage().contains("CONNECT");
+        } finally {
+            proxyThread.join(6000L);
+            server.close();
+        }
+        assertThreadFinished(proxyThread, serverError[0], "HTTPS fake proxy");
+        assertEquals(true, rejected, "HTTPS CONNECT failure reported");
+        String capturedText = new String(captured[0], StandardCharsets.ISO_8859_1);
+        assertContains(capturedText, "CONNECT secure.example:8443 HTTP/1.1",
+                "HTTPS CONNECT target");
+        assertContains(capturedText, "Host: secure.example:8443",
+                "HTTPS CONNECT Host header");
+    }
+
+    private static void testProxyFailureDoesNotStopNextPayload() throws Exception {
+        final ServerSocket server = new ServerSocket(0);
+        server.setSoTimeout(5000);
+        final Throwable[] serverError = new Throwable[1];
+        Thread proxyThread = new Thread(() -> {
+            try {
+                try (Socket first = server.accept()) {
+                    first.setSoTimeout(5000);
+                    readHttpMessage(first.getInputStream());
+                }
+                try (Socket second = server.accept()) {
+                    second.setSoTimeout(5000);
+                    readHttpMessage(second.getInputStream());
+                    OutputStream output = second.getOutputStream();
+                    output.write(("HTTP/1.1 200 OK\r\n"
+                            + "Content-Length: 2\r\n"
+                            + "\r\n"
+                            + "OK").getBytes(StandardCharsets.ISO_8859_1));
+                    output.flush();
+                }
+            } catch (Throwable ex) {
+                serverError[0] = ex;
+            }
+        }, "fake-flaky-proxy");
+        proxyThread.start();
+
+        final RunnerResult[] results = new RunnerResult[2];
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                try {
+                    PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                    RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                            FakeMessage.queryWithMarker());
+                    PayloadInsertionPoint insertionPoint = template.getInsertionPoints().get(0);
+                    TransportConfig config = TransportConfig.parse(
+                            TrafficDestination.BURP_PROXY, "127.0.0.1",
+                            Integer.toString(server.getLocalPort()));
+                    Class<?>[] types = new Class<?>[] {RequestTemplate.class,
+                            PayloadInsertionPoint.class, String.class, String.class,
+                            EncodingStrategy.class, List.class, int.class, int.class,
+                            TransportConfig.class};
+                    results[0] = (RunnerResult) invokePrivate(panel, "sendPayload", types,
+                            template, insertionPoint, "ids", "41", EncodingStrategy.URL_ENCODE,
+                            Collections.<HitRule>emptyList(), Integer.valueOf(1),
+                            Integer.valueOf(1024), config);
+                    results[1] = (RunnerResult) invokePrivate(panel, "sendPayload", types,
+                            template, insertionPoint, "ids", "42", EncodingStrategy.URL_ENCODE,
+                            Collections.<HitRule>emptyList(), Integer.valueOf(2),
+                            Integer.valueOf(1024), config);
+                } catch (Exception ex) {
+                    throw new RuntimeException(ex);
+                }
+            });
+        } finally {
+            proxyThread.join(6000L);
+            server.close();
+        }
+        assertThreadFinished(proxyThread, serverError[0], "flaky fake proxy");
+        assertEquals(true, results[0].getError() != null, "first proxy result marked error");
+        assertEquals(200, results[1].getStatusCode(), "later proxy request still succeeds");
+        assertEquals(0, callbacks.httpRequestCount, "proxy mode bypasses direct callback");
     }
 
     private static void testRequestTemplateAcceptsUrlMarkerWithoutBody() {
@@ -368,21 +644,28 @@ public final class SmokeTest {
                 RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
                         FakeMessage.queryWithMarker());
                 PayloadInsertionPoint insertionPoint = template.getInsertionPoints().get(0);
+                callbacks.nextResponse = callbacks.helpers.stringToBytes(
+                        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK");
+                TransportConfig transportConfig = TransportConfig.parse(
+                        TrafficDestination.DIRECT, "", "not-a-port");
 
                 invokePrivate(panel, "sendPayload",
                         new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
                                 String.class, String.class, EncodingStrategy.class, List.class,
-                                int.class, int.class},
+                                int.class, int.class, TransportConfig.class},
                         template, insertionPoint, "ids", "42", EncodingStrategy.URL_ENCODE,
-                        Collections.<HitRule>emptyList(), Integer.valueOf(3), Integer.valueOf(1024));
+                        Collections.<HitRule>emptyList(), Integer.valueOf(3), Integer.valueOf(1024),
+                        transportConfig);
 
                 RunnerResult result = (RunnerResult) invokePrivate(panel, "sendPayload",
                         new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
                                 String.class, String.class, EncodingStrategy.class, List.class,
-                                int.class, int.class},
+                                int.class, int.class, TransportConfig.class},
                         template, insertionPoint, "ids", "43", EncodingStrategy.URL_ENCODE,
-                        Collections.<HitRule>emptyList(), Integer.valueOf(4), Integer.valueOf(1024));
+                        Collections.<HitRule>emptyList(), Integer.valueOf(4), Integer.valueOf(1024),
+                        transportConfig);
                 assertEquals(0, callbacks.repeaterSendCount, "sendPayload does not auto repeater");
+                assertEquals(2, callbacks.httpRequestCount, "direct transport callback count");
                 assertContains(result.getHistoryRecord().getEndpointKey(),
                         "POST http://example.test:80/submit", "history endpoint key");
             } catch (Exception ex) {
@@ -580,6 +863,12 @@ public final class SmokeTest {
                         (JTextField) privateField(panel, "repeaterCaptionPrefixField");
                 JCheckBox followLatestCheckBox =
                         (JCheckBox) privateField(panel, "followLatestCheckBox");
+                @SuppressWarnings("unchecked")
+                JComboBox<TrafficDestination> trafficDestinationCombo =
+                        (JComboBox<TrafficDestination>) privateField(panel,
+                                "trafficDestinationCombo");
+                JTextField proxyHostField = (JTextField) privateField(panel, "proxyHostField");
+                JTextField proxyPortField = (JTextField) privateField(panel, "proxyPortField");
 
                 categories.setSelectedIndex(indexOfCategory(categories, "XSS"));
                 encodingCombo.setSelectedItem(EncodingStrategy.RAW);
@@ -590,6 +879,9 @@ public final class SmokeTest {
                 rulesArea.setText("status:5xx");
                 repeaterCaptionPrefixField.setText("profile");
                 followLatestCheckBox.setSelected(false);
+                trafficDestinationCombo.setSelectedItem(TrafficDestination.BURP_PROXY);
+                proxyHostField.setText("127.0.0.2");
+                proxyPortField.setText("9090");
                 invokePrivate(panel, "saveCurrentProfile", new Class<?>[] {});
 
                 PayloadRunnerPanel loaded = new PayloadRunnerPanel(callbacks, callbacks.helpers);
@@ -619,6 +911,16 @@ public final class SmokeTest {
                         "repeaterCaptionPrefixField")).getText(), "profile repeater prefix");
                 assertEquals(false, ((JCheckBox) privateField(loaded,
                         "followLatestCheckBox")).isSelected(), "profile follow latest");
+                assertEquals(TrafficDestination.BURP_PROXY,
+                        ((JComboBox<?>) privateField(loaded,
+                                "trafficDestinationCombo")).getSelectedItem(),
+                        "profile traffic destination");
+                assertEquals("127.0.0.2",
+                        ((JTextField) privateField(loaded, "proxyHostField")).getText(),
+                        "profile proxy host");
+                assertEquals("9090",
+                        ((JTextField) privateField(loaded, "proxyPortField")).getText(),
+                        "profile proxy port");
                 assertEquals(Collections.singletonList("XSS"),
                         loadedCategories.getSelectedValuesList(), "profile categories");
             } catch (Exception ex) {
@@ -774,6 +1076,12 @@ public final class SmokeTest {
                         (JTextField) privateField(panel, "repeaterCaptionPrefixField");
                 JCheckBox followLatestCheckBox =
                         (JCheckBox) privateField(panel, "followLatestCheckBox");
+                @SuppressWarnings("unchecked")
+                JComboBox<TrafficDestination> trafficDestinationCombo =
+                        (JComboBox<TrafficDestination>) privateField(panel,
+                                "trafficDestinationCombo");
+                JTextField proxyHostField = (JTextField) privateField(panel, "proxyHostField");
+                JTextField proxyPortField = (JTextField) privateField(panel, "proxyPortField");
 
                 encodingCombo.setSelectedItem(EncodingStrategy.RAW);
                 rateLimitCombo.setSelectedItem(RateLimit.LOW);
@@ -781,6 +1089,9 @@ public final class SmokeTest {
                 maxResponseKbField.setText("456");
                 repeaterCaptionPrefixField.setText("查询");
                 followLatestCheckBox.setSelected(false);
+                trafficDestinationCombo.setSelectedItem(TrafficDestination.BURP_PROXY);
+                proxyHostField.setText("localhost");
+                proxyPortField.setText("8181");
                 invokePrivate(panel, "saveUiSettings", new Class<?>[] {});
 
                 @SuppressWarnings("unchecked")
@@ -812,6 +1123,19 @@ public final class SmokeTest {
                 assertEquals("456", loadedMaxResponseKb.getText(), "loaded max response");
                 assertEquals("查询", loadedPrefix.getText(), "loaded repeater prefix");
                 assertEquals(false, loadedFollowLatest.isSelected(), "loaded follow latest");
+                assertEquals(TrafficDestination.BURP_PROXY,
+                        ((JComboBox<?>) privateField(loaded,
+                                "trafficDestinationCombo")).getSelectedItem(),
+                        "loaded traffic destination");
+                assertEquals("localhost",
+                        ((JTextField) privateField(loaded, "proxyHostField")).getText(),
+                        "loaded proxy host");
+                assertEquals("8181",
+                        ((JTextField) privateField(loaded, "proxyPortField")).getText(),
+                        "loaded proxy port");
+                assertEquals(true,
+                        ((JTextField) privateField(loaded, "proxyHostField")).isEnabled(),
+                        "proxy fields enabled for proxy mode");
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
@@ -881,6 +1205,35 @@ public final class SmokeTest {
                 assertEquals("全部状态",
                         ((JComboBox<?>) privateField(panel, "statusFilterCombo")).getItemAt(0),
                         "localized status filter");
+                JComboBox<?> destination =
+                        (JComboBox<?>) privateField(panel, "trafficDestinationCombo");
+                assertEquals(TrafficDestination.DIRECT, destination.getSelectedItem(),
+                        "default traffic destination");
+                assertEquals("直接发送", destination.getItemAt(0).toString(),
+                        "localized direct destination");
+                assertEquals("经 Burp Proxy 发送", destination.getItemAt(1).toString(),
+                        "localized proxy destination");
+                assertEquals(false,
+                        ((JTextField) privateField(panel, "proxyHostField")).isEnabled(),
+                        "proxy host disabled in direct mode");
+                assertEquals("127.0.0.1",
+                        ((JTextField) privateField(panel, "proxyHostField")).getText(),
+                        "default proxy host");
+                assertEquals(false,
+                        ((JTextField) privateField(panel, "proxyPortField")).isEnabled(),
+                        "proxy port disabled in direct mode");
+                assertEquals("8080",
+                        ((JTextField) privateField(panel, "proxyPortField")).getText(),
+                        "default proxy port");
+                assertEquals("导入 Burp CA...",
+                        ((JButton) privateField(panel, "importProxyCaButton")).getText(),
+                        "localized import proxy CA button");
+                assertEquals("从 Proxy 获取 CA...",
+                        ((JButton) privateField(panel, "fetchProxyCaButton")).getText(),
+                        "localized fetch proxy CA button");
+                assertEquals(false,
+                        ((JButton) privateField(panel, "importProxyCaButton")).isEnabled(),
+                        "import proxy CA disabled in direct mode");
                 assertEquals("接口", ((JTable) privateField(panel, "resultTable"))
                         .getColumnName(1), "localized result column");
                 JTabbedPane tabs = (JTabbedPane) privateField(panel, "mainTabs");
@@ -1081,6 +1434,56 @@ public final class SmokeTest {
             }
         }
         throw new AssertionError("missing category " + name);
+    }
+
+    private static byte[] readHttpMessage(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        int state = 0;
+        while (state < 4) {
+            int value = input.read();
+            if (value < 0) {
+                throw new IOException("unexpected EOF while reading test request header");
+            }
+            output.write(value);
+            if (state == 0) {
+                state = value == '\r' ? 1 : 0;
+            } else if (state == 1) {
+                state = value == '\n' ? 2 : value == '\r' ? 1 : 0;
+            } else if (state == 2) {
+                state = value == '\r' ? 3 : 0;
+            } else if (state == 3) {
+                state = value == '\n' ? 4 : 0;
+            }
+        }
+        String header = new String(output.toByteArray(), StandardCharsets.ISO_8859_1);
+        int contentLength = 0;
+        for (String line : header.split("\\r\\n")) {
+            int colon = line.indexOf(':');
+            if (colon > 0 && "content-length".equalsIgnoreCase(
+                    line.substring(0, colon).trim())) {
+                contentLength = Integer.parseInt(line.substring(colon + 1).trim());
+            }
+        }
+        byte[] buffer = new byte[1024];
+        int remaining = contentLength;
+        while (remaining > 0) {
+            int count = input.read(buffer, 0, Math.min(buffer.length, remaining));
+            if (count < 0) {
+                throw new IOException("unexpected EOF while reading test request body");
+            }
+            output.write(buffer, 0, count);
+            remaining -= count;
+        }
+        return output.toByteArray();
+    }
+
+    private static void assertThreadFinished(Thread thread, Throwable error, String label) {
+        if (thread.isAlive()) {
+            throw new AssertionError(label + " thread did not finish");
+        }
+        if (error != null) {
+            throw new AssertionError(label + " failed", error);
+        }
     }
 
     private static Object privateField(Object target, String name) throws Exception {

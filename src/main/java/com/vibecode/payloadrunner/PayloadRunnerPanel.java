@@ -9,6 +9,7 @@ import burp.IMessageEditorController;
 import burp.IResponseInfo;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
@@ -57,6 +58,7 @@ import javax.swing.SwingWorker;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.table.TableColumnModel;
+import javax.swing.table.TableCellRenderer;
 import javax.swing.table.TableRowSorter;
 
 final class PayloadRunnerPanel extends JPanel implements IMessageEditorController {
@@ -72,15 +74,15 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private static final String PROXY_HOST_SETTING = "proxyHost";
     private static final String PROXY_PORT_SETTING = "proxyPort";
     private static final String PROXY_CA_SETTING = "proxyCaCertificate";
+    private static final String HIT_COLOR_SETTING = "hitHighlightColor";
     private static final String PROFILE_INDEX_SETTING = "profileIndex";
     private static final String PROFILE_SETTING_PREFIX = "profile.";
     private static final String DEFAULT_YAML = DefaultPayloads.load();
-    private static final String DEFAULT_RULES =
-            "# 每行一条规则：keyword:admin、regex:uid=\\d+、status:5xx\n"
-                    + "# 也支持 length>1000、diff>200、sim<90\n";
+    private static final String DEFAULT_RULES = HitRuleTemplate.practicalRules();
 
     private final IBurpExtenderCallbacks callbacks;
     private final IExtensionHelpers helpers;
+    private final ProxyHighlightSupport proxyHighlightSupport;
     private final JTextArea yamlArea = new JTextArea(DEFAULT_YAML, 12, 44);
     private final DefaultListModel<String> categoryModel = new DefaultListModel<String>();
     private final JList<String> categoryList = new JList<String>(categoryModel);
@@ -88,7 +90,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JList<RequestTemplate> requestList = new JList<RequestTemplate>(requestModel);
     private final JTextArea rulesArea = new JTextArea(DEFAULT_RULES, 5, 24);
     private final ResultTableModel resultModel = new ResultTableModel();
-    private final JTable resultTable = new JTable(resultModel);
+    private final JTable resultTable = new JTable(resultModel) {
+        @Override
+        public Component prepareRenderer(TableCellRenderer renderer, int row, int column) {
+            Component component = super.prepareRenderer(renderer, row, column);
+            applyResultRowColor(component, row, isRowSelected(row));
+            return component;
+        }
+    };
     private final TableRowSorter<ResultTableModel> resultSorter =
             new TableRowSorter<ResultTableModel>(resultModel);
     private final JLabel statusLabel = new JLabel("在 Burp 请求上右键，选择“发送到 Payload Runner”即可添加任务。");
@@ -144,6 +153,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             new String[] {"全部结果", "选中结果", "重点结果"});
     private final JComboBox<HitRuleTemplate> hitRuleTemplateCombo =
             new JComboBox<HitRuleTemplate>(HitRuleTemplate.values());
+    private final JComboBox<HitHighlightColor> hitHighlightColorCombo =
+            new JComboBox<HitHighlightColor>(HitHighlightColor.values());
     private final JLabel resultSummaryLabel = new JLabel("结果：0");
     private final JLabel proxyCaStatusLabel = new JLabel("未导入（HTTPS 使用 JVM 信任库）");
     private final JLabel historyPositionLabel = new JLabel("#000 / 0");
@@ -165,9 +176,15 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private SwingWorker<X509Certificate, Void> proxyCaWorker;
 
     PayloadRunnerPanel(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers) {
+        this(callbacks, helpers, null);
+    }
+
+    PayloadRunnerPanel(IBurpExtenderCallbacks callbacks, IExtensionHelpers helpers,
+            ProxyHighlightSupport proxyHighlightSupport) {
         super(new BorderLayout(8, 8));
         this.callbacks = callbacks;
         this.helpers = helpers;
+        this.proxyHighlightSupport = proxyHighlightSupport;
         this.requestViewer = callbacks.createMessageEditor(this, false);
         this.responseViewer = callbacks.createMessageEditor(this, false);
 
@@ -274,6 +291,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         JPanel rulesButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         rulesButtonPanel.add(hitRuleTemplateCombo);
         rulesButtonPanel.add(applyRuleTemplateButton);
+        rulesButtonPanel.add(new JLabel("命中颜色"));
+        hitHighlightColorCombo.setSelectedItem(HitHighlightColor.RED);
+        rulesButtonPanel.add(hitHighlightColorCombo);
         rulesButtonPanel.add(saveRulesButton);
         rulesButtonPanel.add(resetRulesButton);
         rulesPanel.add(rulesButtonPanel, BorderLayout.SOUTH);
@@ -444,6 +464,26 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         columns.getColumn(15).setPreferredWidth(80);
     }
 
+    private void applyResultRowColor(Component component, int viewRow, boolean selected) {
+        if (selected || viewRow < 0 || viewRow >= resultTable.getRowCount()) {
+            return;
+        }
+        component.setForeground(resultTable.getForeground());
+        component.setBackground(resultTable.getBackground());
+        int modelRow = resultTable.convertRowIndexToModel(viewRow);
+        if (modelRow < 0 || modelRow >= resultModel.getRowCount()) {
+            return;
+        }
+        RunnerResult result = resultModel.getResult(modelRow);
+        HitHighlightColor color =
+                (HitHighlightColor) hitHighlightColorCombo.getSelectedItem();
+        if (!result.getHitMatch().trim().isEmpty()
+                && color != null && color.getTableColor() != null) {
+            component.setBackground(color.getTableColor());
+            component.setForeground(Color.BLACK);
+        }
+    }
+
     private void wireActions() {
         parseButton.addActionListener(event -> parseYamlIntoCategories(true));
         savePayloadsButton.addActionListener(event -> savePayloads());
@@ -454,6 +494,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         selectAllCategoriesButton.addActionListener(event -> selectAllCategories());
         clearCategoriesButton.addActionListener(event -> clearCategorySelection());
         trafficDestinationCombo.addActionListener(event -> updateProxyFieldsEnabled());
+        hitHighlightColorCombo.addActionListener(event -> {
+            resultTable.repaint();
+            saveUiSettings();
+        });
         fetchProxyCaButton.addActionListener(event -> fetchProxyCa());
         importProxyCaButton.addActionListener(event -> importProxyCa());
         clearProxyCaButton.addActionListener(event -> clearProxyCa());
@@ -1109,6 +1153,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         if (savedProxyPort != null && !savedProxyPort.trim().isEmpty()) {
             proxyPortField.setText(savedProxyPort.trim());
         }
+        hitHighlightColorCombo.setSelectedItem(HitHighlightColor.fromSetting(
+                callbacks.loadExtensionSetting(HIT_COLOR_SETTING)));
         loadProxyCaSetting();
         updateProxyFieldsEnabled();
         loadProfilesIntoCombo();
@@ -1132,6 +1178,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 destination == null ? TrafficDestination.DIRECT.name() : destination.name());
         callbacks.saveExtensionSetting(PROXY_HOST_SETTING, proxyHostField.getText().trim());
         callbacks.saveExtensionSetting(PROXY_PORT_SETTING, proxyPortField.getText().trim());
+        HitHighlightColor highlightColor =
+                (HitHighlightColor) hitHighlightColorCombo.getSelectedItem();
+        callbacks.saveExtensionSetting(HIT_COLOR_SETTING,
+                highlightColor == null ? HitHighlightColor.RED.name() : highlightColor.name());
     }
 
     private void loadProfilesIntoCombo() {
@@ -1319,6 +1369,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 destination == null ? TrafficDestination.DIRECT.name() : destination.name());
         profile.setProperty("proxyHost", proxyHostField.getText().trim());
         profile.setProperty("proxyPort", proxyPortField.getText().trim());
+        HitHighlightColor highlightColor =
+                (HitHighlightColor) hitHighlightColorCombo.getSelectedItem();
+        profile.setProperty("hitHighlightColor",
+                highlightColor == null ? HitHighlightColor.RED.name() : highlightColor.name());
 
         try {
             StringWriter writer = new StringWriter();
@@ -1376,6 +1430,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 TransportConfig.DEFAULT_PROXY_HOST).trim());
         proxyPortField.setText(profile.getProperty("proxyPort",
                 Integer.toString(TransportConfig.DEFAULT_PROXY_PORT)).trim());
+        applyEnumSelection(hitHighlightColorCombo, HitHighlightColor.class,
+                profile.getProperty("hitHighlightColor"), HitHighlightColor.RED);
         updateProxyFieldsEnabled();
         restoreCategorySelection(splitLines(profile.getProperty("categories", "")));
         saveUiSettings();
@@ -1573,6 +1629,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
+        final HitHighlightColor hitHighlightColor = selectedHitHighlightColor();
         int total = 0;
         int markerCount = countInsertionPoints(requests);
         int uniquePayloadCount = 0;
@@ -1631,7 +1688,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                                 int variantIndex = ++attempted;
                                 publish(sendPayload(template, insertionPoint, category, payload,
                                         encodingStrategy, hitRules, variantIndex,
-                                        maxResponseBytes, transportConfig));
+                                        maxResponseBytes, transportConfig, hitHighlightColor));
                             }
                         }
                     }
@@ -1723,6 +1780,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     JOptionPane.ERROR_MESSAGE);
             return;
         }
+        final HitHighlightColor hitHighlightColor = selectedHitHighlightColor();
 
         final EncodingStrategy encodingStrategy =
                 (EncodingStrategy) encodingCombo.getSelectedItem();
@@ -1756,7 +1814,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                     int variantIndex = ++attempted;
                     publish(sendPayload(variant.template, variant.insertionPoint,
                             variant.category, variant.payload, encodingStrategy, hitRules,
-                            variantIndex, maxResponseBytes, transportConfig));
+                            variantIndex, maxResponseBytes, transportConfig,
+                            hitHighlightColor));
                 }
                 return null;
             }
@@ -1824,10 +1883,12 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private RunnerResult sendPayload(RequestTemplate template, PayloadInsertionPoint insertionPoint,
             String category, String payload, EncodingStrategy encodingStrategy,
             List<HitRule> hitRules, int variantIndex, int maxResponseBytes,
-            TransportConfig transportConfig) {
+            TransportConfig transportConfig, HitHighlightColor hitHighlightColor) {
         byte[] request = insertionPoint.buildRequest(payload, encodingStrategy);
         long started = System.nanoTime();
         byte[] response = null;
+        IHttpRequestResponse directResult = null;
+        String proxyTraceId = null;
         int statusCode = -1;
         int responseLength = 0;
         String responseText = "";
@@ -1836,13 +1897,15 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         String error = null;
         try {
             if (transportConfig.usesProxy()) {
+                if (proxyHighlightSupport != null && hitHighlightColor.isEnabled()) {
+                    proxyTraceId = proxyHighlightSupport.begin(template.getService(), request);
+                }
                 response = ProxyTransport.send(template.getService(), request,
                         transportConfig.getProxyHost(), transportConfig.getProxyPort(),
                         transportConfig.getProxyCa());
             } else {
-                IHttpRequestResponse result =
-                        callbacks.makeHttpRequest(template.getService(), request);
-                response = result == null ? null : result.getResponse();
+                directResult = callbacks.makeHttpRequest(template.getService(), request);
+                response = directResult == null ? null : directResult.getResponse();
             }
             if (response != null) {
                 responseLength = response.length;
@@ -1851,9 +1914,6 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 responseText = helpers.bytesToString(response);
                 responseDiff = ResponseDiff.between(helpers, template.getBaselineResponse(),
                         response, statusCode);
-                hitMatch = HitRule.evaluate(hitRules,
-                        new HitRule.MatchInput(responseText, statusCode, responseLength,
-                                responseDiff));
             }
         } catch (IOException ex) {
             error = proxyErrorMessage(ex, transportConfig);
@@ -1861,11 +1921,32 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             error = ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage();
         }
         long elapsedMillis = Math.max(0L, (System.nanoTime() - started) / 1000000L);
+        if (response != null && error == null) {
+            hitMatch = HitRule.evaluate(hitRules,
+                    new HitRule.MatchInput(responseText, statusCode, responseLength,
+                            responseDiff, elapsedMillis));
+        }
+        boolean hit = !hitMatch.trim().isEmpty();
+        if (proxyTraceId != null) {
+            proxyHighlightSupport.complete(proxyTraceId, hit, hitHighlightColor);
+        } else if (hit && directResult != null && hitHighlightColor.isEnabled()) {
+            if (proxyHighlightSupport != null) {
+                proxyHighlightSupport.highlight(directResult, hitHighlightColor);
+            } else {
+                directResult.setHighlight(hitHighlightColor.getBurpColor());
+            }
+        }
         HistoryRecord historyRecord = new HistoryRecord(historyStore.nextId(), template,
                 insertionPoint.getName(), category, payload, request, response, statusCode,
                 responseLength, elapsedMillis, System.currentTimeMillis(), maxResponseBytes);
         int score = scoreResult(statusCode, elapsedMillis, hitMatch, responseDiff, error);
         return new RunnerResult(template, historyRecord, hitMatch, responseDiff.summary(), score, error);
+    }
+
+    private HitHighlightColor selectedHitHighlightColor() {
+        HitHighlightColor color =
+                (HitHighlightColor) hitHighlightColorCombo.getSelectedItem();
+        return color == null ? HitHighlightColor.RED : color;
     }
 
     private String proxyErrorMessage(IOException exception, TransportConfig transportConfig) {
@@ -1986,6 +2067,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resetPayloadsButton.setEnabled(!running);
         applyRuleTemplateButton.setEnabled(!running);
         hitRuleTemplateCombo.setEnabled(!running);
+        hitHighlightColorCombo.setEnabled(!running);
         saveRulesButton.setEnabled(!running);
         resetRulesButton.setEnabled(!running);
         selectAllCategoriesButton.setEnabled(!running);

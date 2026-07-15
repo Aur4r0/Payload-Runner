@@ -4,8 +4,13 @@ import burp.IExtensionHelpers;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 final class BodyInsertionPoint implements PayloadInsertionPoint {
+    private static final Pattern MULTIPART_DISPOSITION_PARAMETER = Pattern.compile(
+            "(?i)(?:^|;)\\s*(name|filename\\*?)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^;\\r\\n]*))");
     private final IExtensionHelpers helpers;
     private final List<String> headers;
     private final String name;
@@ -97,13 +102,15 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
 
             int headersEnd = headerEnd(body, partStart, nextMarker);
             if (headersEnd > 0) {
+                String partHeaders = body.substring(partStart, headersEnd);
+                String name = multipartName(partHeaders);
+                addMultipartHeaderPoints(helpers, headers, body, partHeaders, partStart,
+                        name, points);
                 int contentStart = headersEnd + headerSeparatorLength(body, headersEnd);
                 int contentEnd = trimPartTerminator(body, contentStart, nextMarker);
                 if (contentStart <= contentEnd) {
                     String content = body.substring(contentStart, contentEnd);
                     if (content.contains("*")) {
-                        String partHeaders = body.substring(partStart, headersEnd);
-                        String name = multipartName(partHeaders);
                         final int start = contentStart;
                         final int end = contentEnd;
                         points.add(new BodyInsertionPoint(helpers, headers, "multipart:" + name,
@@ -113,6 +120,17 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 }
             }
             markerStart = nextMarker;
+        }
+        return points;
+    }
+
+    static List<BodyInsertionPoint> fromRawBody(IExtensionHelpers helpers, List<String> headers,
+            String body) {
+        List<BodyInsertionPoint> points = new ArrayList<BodyInsertionPoint>();
+        if (body != null && body.contains("*")) {
+            points.add(new BodyInsertionPoint(helpers, headers, "body:raw",
+                    (payload, encodingStrategy) -> body.replace("*",
+                            encodingStrategy.encode(helpers, payload))));
         }
         return points;
     }
@@ -321,26 +339,72 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
     }
 
     private static String multipartName(String partHeaders) {
-        String lower = partHeaders.toLowerCase();
-        int nameAt = lower.indexOf("name=");
-        if (nameAt < 0) {
-            return "part";
+        String[] lines = partHeaders.replace("\r\n", "\n").replace('\r', '\n')
+                .split("\n");
+        for (String line : lines) {
+            int colon = line.indexOf(':');
+            if (colon <= 0 || !"content-disposition".equalsIgnoreCase(
+                    line.substring(0, colon).trim())) {
+                continue;
+            }
+            Matcher matcher = MULTIPART_DISPOSITION_PARAMETER.matcher(
+                    line.substring(colon + 1));
+            while (matcher.find()) {
+                if ("name".equalsIgnoreCase(matcher.group(1))) {
+                    String value = matcher.group(matchedValueGroup(matcher));
+                    return value == null || value.isEmpty() ? "part" : value;
+                }
+            }
         }
-        int start = nameAt + 5;
-        if (start >= partHeaders.length()) {
-            return "part";
+        return "part";
+    }
+
+    private static void addMultipartHeaderPoints(IExtensionHelpers helpers, List<String> headers,
+            String body, String partHeaders, int partStart, String fieldName,
+            List<BodyInsertionPoint> points) {
+        int lineStart = 0;
+        while (lineStart < partHeaders.length()) {
+            int lineEnd = partHeaders.indexOf('\n', lineStart);
+            if (lineEnd < 0) {
+                lineEnd = partHeaders.length();
+            }
+            int contentEnd = lineEnd > lineStart && partHeaders.charAt(lineEnd - 1) == '\r'
+                    ? lineEnd - 1
+                    : lineEnd;
+            String line = partHeaders.substring(lineStart, contentEnd);
+            int colon = line.indexOf(':');
+            if (colon > 0 && "content-disposition".equals(
+                    line.substring(0, colon).trim().toLowerCase(Locale.ROOT))) {
+                String value = line.substring(colon + 1);
+                Matcher matcher = MULTIPART_DISPOSITION_PARAMETER.matcher(value);
+                while (matcher.find()) {
+                    int group = matchedValueGroup(matcher);
+                    String parameterValue = matcher.group(group);
+                    if (parameterValue != null && parameterValue.contains("*")) {
+                        String parameter = matcher.group(1).toLowerCase(Locale.ROOT);
+                        int start = partStart + lineStart + colon + 1 + matcher.start(group);
+                        int end = partStart + lineStart + colon + 1 + matcher.end(group);
+                        String pointName = parameter.startsWith("filename")
+                                ? "multipart:filename:" + safeMultipartFieldName(fieldName)
+                                : "multipart:name";
+                        points.add(new BodyInsertionPoint(helpers, headers, pointName,
+                                (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
+                                        start, end, payload, encodingStrategy)));
+                    }
+                }
+            }
+            lineStart = lineEnd < partHeaders.length() ? lineEnd + 1 : lineEnd;
         }
-        char quote = partHeaders.charAt(start);
-        if (quote == '"' || quote == '\'') {
-            int end = partHeaders.indexOf(quote, start + 1);
-            return end > start ? partHeaders.substring(start + 1, end) : "part";
-        }
-        int end = start;
-        while (end < partHeaders.length() && partHeaders.charAt(end) != ';'
-                && !Character.isWhitespace(partHeaders.charAt(end))) {
-            end++;
-        }
-        return partHeaders.substring(start, end);
+    }
+
+    private static String safeMultipartFieldName(String fieldName) {
+        return fieldName == null || fieldName.isEmpty() || fieldName.contains("*")
+                ? "file"
+                : fieldName;
+    }
+
+    private static int matchedValueGroup(Matcher matcher) {
+        return matcher.start(2) >= 0 ? 2 : matcher.start(3) >= 0 ? 3 : 4;
     }
 
     private static boolean isXmlDataTag(String body, int tagStart, int tagEnd) {

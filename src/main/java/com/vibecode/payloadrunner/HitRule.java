@@ -93,6 +93,12 @@ abstract class HitRule {
         if (lower.startsWith("sim")) {
             return numeric("sim", line.substring("sim".length()).trim(), lineNumber);
         }
+        if (lower.startsWith("elapsed")) {
+            return numeric("time", line.substring("elapsed".length()).trim(), lineNumber);
+        }
+        if (lower.startsWith("time")) {
+            return numeric("time", line.substring("time".length()).trim(), lineNumber);
+        }
         return keyword(line);
     }
 
@@ -121,7 +127,7 @@ abstract class HitRule {
             };
         }
         try {
-            int expected = Integer.parseInt(value);
+            long expected = Long.parseLong(value);
             return new HitRule("status:" + expected) {
                 @Override
                 boolean matches(MatchInput input) {
@@ -160,7 +166,7 @@ abstract class HitRule {
         }
     }
 
-    private static int numericValue(String field, MatchInput input) {
+    private static long numericValue(String field, MatchInput input) {
         if ("status".equals(field)) {
             return input.statusCode;
         }
@@ -173,10 +179,13 @@ abstract class HitRule {
         if ("sim".equals(field)) {
             return input.diff == null || !input.diff.isAvailable() ? 100 : input.diff.getSimilarityPercent();
         }
+        if ("time".equals(field)) {
+            return input.elapsedMillis;
+        }
         return 0;
     }
 
-    private static boolean compare(int actual, String operator, int expected) {
+    private static boolean compare(long actual, String operator, long expected) {
         if (">".equals(operator)) {
             return actual > expected;
         }
@@ -226,12 +235,19 @@ abstract class HitRule {
         private final int statusCode;
         private final int responseLength;
         private final ResponseDiff diff;
+        private final long elapsedMillis;
 
         MatchInput(String responseText, int statusCode, int responseLength, ResponseDiff diff) {
+            this(responseText, statusCode, responseLength, diff, 0L);
+        }
+
+        MatchInput(String responseText, int statusCode, int responseLength, ResponseDiff diff,
+                long elapsedMillis) {
             this.responseText = responseText;
             this.statusCode = statusCode;
             this.responseLength = responseLength;
             this.diff = diff;
+            this.elapsedMillis = elapsedMillis;
         }
     }
 }

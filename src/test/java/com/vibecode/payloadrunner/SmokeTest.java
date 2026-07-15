@@ -5,12 +5,14 @@ import burp.IContextMenuInvocation;
 import burp.IExtensionHelpers;
 import burp.IHttpService;
 import burp.IHttpRequestResponse;
+import burp.IInterceptedProxyMessage;
 import burp.IMessageEditor;
 import burp.IMessageEditorController;
 import burp.IRequestInfo;
 import burp.IResponseInfo;
 import burp.IContextMenuFactory;
 import burp.ITab;
+import burp.IProxyListener;
 
 import java.awt.Component;
 import java.io.ByteArrayOutputStream;
@@ -67,8 +69,13 @@ public final class SmokeTest {
         testFormInsertionPoints();
         testJsonInsertionPoints();
         testMultipartInsertionPoints();
+        testRawBodyInsertionPoints();
         testXmlInsertionPoints();
         testResponseDiffAndHitRules();
+        testPracticalHitRules();
+        testProxyHighlightSupport();
+        testProxyHitHighlightsHistory();
+        testHitResultRowColor();
         testRepeaterCaptionAndSend();
         testRepeaterSendFailureDoesNotThrow();
         testRepeaterSkippedWhenHistoryBytesDropped();
@@ -432,15 +439,15 @@ public final class SmokeTest {
                     Class<?>[] types = new Class<?>[] {RequestTemplate.class,
                             PayloadInsertionPoint.class, String.class, String.class,
                             EncodingStrategy.class, List.class, int.class, int.class,
-                            TransportConfig.class};
+                            TransportConfig.class, HitHighlightColor.class};
                     results[0] = (RunnerResult) invokePrivate(panel, "sendPayload", types,
                             template, insertionPoint, "ids", "41", EncodingStrategy.URL_ENCODE,
                             Collections.<HitRule>emptyList(), Integer.valueOf(1),
-                            Integer.valueOf(1024), config);
+                            Integer.valueOf(1024), config, HitHighlightColor.RED);
                     results[1] = (RunnerResult) invokePrivate(panel, "sendPayload", types,
                             template, insertionPoint, "ids", "42", EncodingStrategy.URL_ENCODE,
                             Collections.<HitRule>emptyList(), Integer.valueOf(2),
-                            Integer.valueOf(1024), config);
+                            Integer.valueOf(1024), config, HitHighlightColor.RED);
                 } catch (Exception ex) {
                     throw new RuntimeException(ex);
                 }
@@ -518,17 +525,52 @@ public final class SmokeTest {
                 "Content-Type: multipart/form-data; boundary=abc123");
         String body = ""
                 + "--abc123\r\n"
-                + "Content-Disposition: form-data; name=\"file\"\r\n"
+                + "Content-Disposition: form-data; name=\"file\"; filename=\"*\"\r\n"
                 + "\r\n"
                 + "pre*post\r\n"
                 + "--abc123--\r\n";
 
         List<BodyInsertionPoint> points = BodyInsertionPoint.fromMultipart(helpers, headers, body);
-        assertEquals(1, points.size(), "multipart marker count");
-        assertEquals("multipart:file", points.get(0).getName(), "multipart parameter name");
+        assertEquals(2, points.size(), "multipart marker count");
+        assertEquals("multipart:filename:file", points.get(0).getName(),
+                "multipart filename marker");
+        assertEquals("multipart:file", points.get(1).getName(), "multipart parameter name");
 
-        String request = helpers.bytesToString(points.get(0).buildRequest("A B"));
+        String request = helpers.bytesToString(points.get(1).buildRequest("A B"));
         assertContains(request, "preA+Bpost", "multipart replacement");
+        String filenameRequest = helpers.bytesToString(points.get(0).buildRequest("upload.txt"));
+        assertContains(filenameRequest, "filename=\"upload.txt\"", "multipart filename replacement");
+
+        String encodedFilenameBody = body.replace("filename=\"*\"",
+                "filename*=UTF-8''*");
+        List<BodyInsertionPoint> encodedFilenamePoints = BodyInsertionPoint.fromMultipart(
+                helpers, headers, encodedFilenameBody);
+        assertEquals("multipart:filename:file", encodedFilenamePoints.get(0).getName(),
+                "multipart RFC filename marker");
+        String encodedFilenameRequest = helpers.bytesToString(encodedFilenamePoints.get(0)
+                .buildRequest("upload.txt", EncodingStrategy.RAW));
+        assertContains(encodedFilenameRequest, "filename*=UTF-8''upload.txt",
+                "multipart RFC filename replacement");
+    }
+
+    private static void testRawBodyInsertionPoints() {
+        FakeHelpers helpers = new FakeHelpers();
+        RequestTemplate template = RequestTemplate.fromMessage(helpers,
+                FakeMessage.rawBodyWithMarker());
+        assertEquals(1, template.getInsertionPoints().size(), "raw body marker count");
+        assertEquals("body:raw", template.getInsertionPoints().get(0).getName(),
+                "raw body marker name");
+        String request = helpers.bytesToString(template.getInsertionPoints().get(0)
+                .buildRequest("PAY", EncodingStrategy.RAW));
+        assertContains(request, "binaryPAYtailPAY", "raw body replacement");
+
+        RequestTemplate jsonScalar = RequestTemplate.fromMessage(helpers,
+                FakeMessage.jsonScalarWithMarker());
+        assertEquals("body:raw", jsonScalar.getInsertionPoints().get(0).getName(),
+                "unquoted JSON marker raw fallback");
+        String jsonRequest = helpers.bytesToString(jsonScalar.getInsertionPoints().get(0)
+                .buildRequest("42", EncodingStrategy.RAW));
+        assertContains(jsonRequest, "{\"id\":42}", "unquoted JSON marker replacement");
     }
 
     private static void testXmlInsertionPoints() {
@@ -560,13 +602,145 @@ public final class SmokeTest {
         assertEquals(true, diff.getLengthDelta() > 0, "diff length delta");
 
         List<HitRule> rules = HitRule.parse("root",
-                "regex:extra\nstatus:5xx\nlength>20\ndiff>0\nsim<100");
+                "regex:extra\nstatus:5xx\nlength>20\ndiff>0\nsim<100\ntime>=4500");
         String hits = HitRule.evaluate(rules,
-                new HitRule.MatchInput(helpers.bytesToString(response), 500, response.length, diff));
+                new HitRule.MatchInput(helpers.bytesToString(response), 500, response.length,
+                        diff, 5000L));
         assertContains(hits, "keyword:root", "keyword hit rule");
         assertContains(hits, "regex:extra", "regex hit rule");
         assertContains(hits, "status:5xx", "status hit rule");
         assertContains(hits, "diff>0", "diff hit rule");
+        assertContains(hits, "time>=4500", "elapsed time hit rule");
+    }
+
+    private static void testPracticalHitRules() {
+        List<HitRule> rules = HitRule.parse("", HitRuleTemplate.practicalRules());
+        assertEquals(true, rules.size() >= 20, "practical hit rule count");
+
+        String response = "HTTP/1.1 500 Internal Server Error\r\n"
+                + "X-Payload-Runner: true\r\n\r\n"
+                + "SQL syntax error root:x:0:0:root:/root:/bin/bash 7777777";
+        String hits = HitRule.evaluate(rules,
+                new HitRule.MatchInput(response, 500, response.length(),
+                        ResponseDiff.unavailable(), 5000L));
+        assertContains(hits, "status:5xx", "practical status rule");
+        assertContains(hits, "time>=4500", "practical delay rule");
+        assertContains(hits, "keyword:root:x:0:0", "practical file read rule");
+        assertContains(hits, "keyword:7777777", "practical SSTI rule");
+        assertContains(hits, "X-Payload-Runner", "practical CRLF rule");
+    }
+
+    private static void testProxyHighlightSupport() {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        ProxyHighlightSupport support = new ProxyHighlightSupport(callbacks);
+        byte[] original = ("POST /submit HTTP/1.1\r\n"
+                + "Host: example.test\r\n"
+                + "Content-Length: 4\r\n"
+                + "\r\n"
+                + "BODY").getBytes(StandardCharsets.ISO_8859_1);
+        IHttpService service = new FakeHttpService();
+        String traceId = support.begin(service, original);
+        FakeMessage message = new FakeMessage(original, service, null);
+        support.processProxyMessage(true, new FakeInterceptedProxyMessage(message));
+        assertEquals(true, Arrays.equals(original, message.getRequest()),
+                "proxy request bytes remain unchanged");
+        support.complete(traceId, true, HitHighlightColor.ORANGE);
+        assertEquals("orange", message.getHighlight(), "proxy history hit highlighted");
+
+        String noHitTrace = support.begin(service, original);
+        FakeMessage noHitMessage = new FakeMessage(original, service, null);
+        support.processProxyMessage(true, new FakeInterceptedProxyMessage(noHitMessage));
+        support.complete(noHitTrace, false, HitHighlightColor.RED);
+        assertEquals(null, noHitMessage.getHighlight(), "non-hit proxy request not highlighted");
+    }
+
+    private static void testProxyHitHighlightsHistory() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        final ProxyHighlightSupport support = new ProxyHighlightSupport(callbacks);
+        final ServerSocket server = new ServerSocket(0);
+        server.setSoTimeout(5000);
+        final FakeMessage[] proxyMessage = new FakeMessage[1];
+        final Throwable[] serverError = new Throwable[1];
+        Thread proxyThread = new Thread(() -> {
+            try (Socket socket = server.accept()) {
+                socket.setSoTimeout(5000);
+                byte[] request = readHttpMessage(socket.getInputStream());
+                proxyMessage[0] = new FakeMessage(request,
+                        new FakeHttpService("example.test", 80, "http"), null);
+                support.processProxyMessage(true,
+                        new FakeInterceptedProxyMessage(proxyMessage[0]));
+                byte[] body = "SQL syntax error".getBytes(StandardCharsets.ISO_8859_1);
+                OutputStream output = socket.getOutputStream();
+                output.write(("HTTP/1.1 500 Internal Server Error\r\nContent-Length: "
+                        + body.length + "\r\n\r\n")
+                        .getBytes(StandardCharsets.ISO_8859_1));
+                output.write(body);
+                output.flush();
+            } catch (Throwable ex) {
+                serverError[0] = ex;
+            }
+        }, "fake-highlight-proxy");
+        proxyThread.start();
+
+        final RunnerResult[] result = new RunnerResult[1];
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                try {
+                    PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks,
+                            callbacks.helpers, support);
+                    RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                            FakeMessage.queryWithMarker());
+                    PayloadInsertionPoint insertionPoint = template.getInsertionPoints().get(0);
+                    TransportConfig config = TransportConfig.parse(
+                            TrafficDestination.BURP_PROXY, "127.0.0.1",
+                            Integer.toString(server.getLocalPort()));
+                    result[0] = (RunnerResult) invokePrivate(panel, "sendPayload",
+                            new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
+                                    String.class, String.class, EncodingStrategy.class, List.class,
+                                    int.class, int.class, TransportConfig.class,
+                                    HitHighlightColor.class},
+                            template, insertionPoint, "sql注入", "'", EncodingStrategy.RAW,
+                            HitRule.parse("", "keyword:SQL syntax"), Integer.valueOf(1),
+                            Integer.valueOf(1024), config, HitHighlightColor.ORANGE);
+                } catch (Exception ex) {
+                    throw new RuntimeException(ex);
+                }
+            });
+        } finally {
+            proxyThread.join(6000L);
+            server.close();
+        }
+        assertThreadFinished(proxyThread, serverError[0], "highlight fake proxy");
+        assertContains(result[0].getHitMatch(), "keyword:SQL syntax",
+                "proxy response hit detected");
+        assertEquals("orange", proxyMessage[0].getHighlight(),
+                "proxy history message highlighted after hit");
+        assertContains(new String(proxyMessage[0].getRequest(), StandardCharsets.ISO_8859_1),
+                "POST http://example.test/submit?id='",
+                "proxy history request matched by canonical target");
+    }
+
+    private static void testHitResultRowColor() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                ResultTableModel model = (ResultTableModel) privateField(panel, "resultModel");
+                JTable table = (JTable) privateField(panel, "resultTable");
+                RequestTemplate template = RequestTemplate.fromMessage(callbacks.helpers,
+                        FakeMessage.queryWithMarker());
+                RunnerResult hit = new RunnerResult(template, "url:id", "XSS", "payload",
+                        callbacks.helpers.stringToBytes("GET / HTTP/1.1\r\n\r\n"),
+                        callbacks.helpers.stringToBytes("HTTP/1.1 200 OK\r\n\r\nhit"),
+                        200, 21, 1L, "keyword:hit", "", false, "", null);
+                model.addResult(hit);
+                Component component = table.prepareRenderer(table.getCellRenderer(0, 0), 0, 0);
+                assertEquals(HitHighlightColor.RED.getTableColor(), component.getBackground(),
+                        "hit result row background");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
     }
 
     private static void testRepeaterCaptionAndSend() {
@@ -652,20 +826,24 @@ public final class SmokeTest {
                 invokePrivate(panel, "sendPayload",
                         new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
                                 String.class, String.class, EncodingStrategy.class, List.class,
-                                int.class, int.class, TransportConfig.class},
+                                int.class, int.class, TransportConfig.class,
+                                HitHighlightColor.class},
                         template, insertionPoint, "ids", "42", EncodingStrategy.URL_ENCODE,
                         Collections.<HitRule>emptyList(), Integer.valueOf(3), Integer.valueOf(1024),
-                        transportConfig);
+                        transportConfig, HitHighlightColor.RED);
 
                 RunnerResult result = (RunnerResult) invokePrivate(panel, "sendPayload",
                         new Class<?>[] {RequestTemplate.class, PayloadInsertionPoint.class,
                                 String.class, String.class, EncodingStrategy.class, List.class,
-                                int.class, int.class, TransportConfig.class},
+                                int.class, int.class, TransportConfig.class,
+                                HitHighlightColor.class},
                         template, insertionPoint, "ids", "43", EncodingStrategy.URL_ENCODE,
-                        Collections.<HitRule>emptyList(), Integer.valueOf(4), Integer.valueOf(1024),
-                        transportConfig);
+                        HitRule.parse("", "keyword:OK"), Integer.valueOf(4), Integer.valueOf(1024),
+                        transportConfig, HitHighlightColor.RED);
                 assertEquals(0, callbacks.repeaterSendCount, "sendPayload does not auto repeater");
                 assertEquals(2, callbacks.httpRequestCount, "direct transport callback count");
+                assertEquals("red", callbacks.lastHttpResult.getHighlight(),
+                        "direct hit result highlighted");
                 assertContains(result.getHistoryRecord().getEndpointKey(),
                         "POST http://example.test:80/submit", "history endpoint key");
             } catch (Exception ex) {
@@ -869,6 +1047,10 @@ public final class SmokeTest {
                                 "trafficDestinationCombo");
                 JTextField proxyHostField = (JTextField) privateField(panel, "proxyHostField");
                 JTextField proxyPortField = (JTextField) privateField(panel, "proxyPortField");
+                @SuppressWarnings("unchecked")
+                JComboBox<HitHighlightColor> hitHighlightColorCombo =
+                        (JComboBox<HitHighlightColor>) privateField(panel,
+                                "hitHighlightColorCombo");
 
                 categories.setSelectedIndex(indexOfCategory(categories, "XSS"));
                 encodingCombo.setSelectedItem(EncodingStrategy.RAW);
@@ -882,6 +1064,7 @@ public final class SmokeTest {
                 trafficDestinationCombo.setSelectedItem(TrafficDestination.BURP_PROXY);
                 proxyHostField.setText("127.0.0.2");
                 proxyPortField.setText("9090");
+                hitHighlightColorCombo.setSelectedItem(HitHighlightColor.ORANGE);
                 invokePrivate(panel, "saveCurrentProfile", new Class<?>[] {});
 
                 PayloadRunnerPanel loaded = new PayloadRunnerPanel(callbacks, callbacks.helpers);
@@ -921,6 +1104,10 @@ public final class SmokeTest {
                 assertEquals("9090",
                         ((JTextField) privateField(loaded, "proxyPortField")).getText(),
                         "profile proxy port");
+                assertEquals(HitHighlightColor.ORANGE,
+                        ((JComboBox<?>) privateField(loaded,
+                                "hitHighlightColorCombo")).getSelectedItem(),
+                        "profile hit highlight color");
                 assertEquals(Collections.singletonList("XSS"),
                         loadedCategories.getSelectedValuesList(), "profile categories");
             } catch (Exception ex) {
@@ -1082,6 +1269,10 @@ public final class SmokeTest {
                                 "trafficDestinationCombo");
                 JTextField proxyHostField = (JTextField) privateField(panel, "proxyHostField");
                 JTextField proxyPortField = (JTextField) privateField(panel, "proxyPortField");
+                @SuppressWarnings("unchecked")
+                JComboBox<HitHighlightColor> hitHighlightColorCombo =
+                        (JComboBox<HitHighlightColor>) privateField(panel,
+                                "hitHighlightColorCombo");
 
                 encodingCombo.setSelectedItem(EncodingStrategy.RAW);
                 rateLimitCombo.setSelectedItem(RateLimit.LOW);
@@ -1092,6 +1283,7 @@ public final class SmokeTest {
                 trafficDestinationCombo.setSelectedItem(TrafficDestination.BURP_PROXY);
                 proxyHostField.setText("localhost");
                 proxyPortField.setText("8181");
+                hitHighlightColorCombo.setSelectedItem(HitHighlightColor.GREEN);
                 invokePrivate(panel, "saveUiSettings", new Class<?>[] {});
 
                 @SuppressWarnings("unchecked")
@@ -1136,6 +1328,10 @@ public final class SmokeTest {
                 assertEquals(true,
                         ((JTextField) privateField(loaded, "proxyHostField")).isEnabled(),
                         "proxy fields enabled for proxy mode");
+                assertEquals(HitHighlightColor.GREEN,
+                        ((JComboBox<?>) privateField(loaded,
+                                "hitHighlightColorCombo")).getSelectedItem(),
+                        "loaded hit highlight color");
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
@@ -1189,6 +1385,8 @@ public final class SmokeTest {
                 "extension load success banner");
         assertContains(callbacks.outputText(), "https://github.com/Aur4r0/Payload-Runner",
                 "extension load github link");
+        assertEquals(true, callbacks.proxyListener != null,
+                "extension registers official proxy listener");
     }
 
     private static void testLocalizedUiLabels() throws Exception {
@@ -1234,6 +1432,12 @@ public final class SmokeTest {
                 assertEquals(false,
                         ((JButton) privateField(panel, "importProxyCaButton")).isEnabled(),
                         "import proxy CA disabled in direct mode");
+                assertEquals(HitHighlightColor.RED,
+                        ((JComboBox<?>) privateField(panel,
+                                "hitHighlightColorCombo")).getSelectedItem(),
+                        "default hit highlight color");
+                assertContains(((JTextArea) privateField(panel, "rulesArea")).getText(),
+                        "time>=4500", "default practical delay rule");
                 assertEquals("接口", ((JTable) privateField(panel, "resultTable"))
                         .getColumnName(1), "localized result column");
                 JTabbedPane tabs = (JTabbedPane) privateField(panel, "mainTabs");
@@ -1610,6 +1814,8 @@ public final class SmokeTest {
         private byte[] nextResponse;
         private int httpRequestCount;
         private byte[] lastHttpRequest;
+        private FakeMessage lastHttpResult;
+        private IProxyListener proxyListener;
 
         @Override
         public void setExtensionName(String name) {
@@ -1617,6 +1823,11 @@ public final class SmokeTest {
 
         @Override
         public void registerContextMenuFactory(IContextMenuFactory factory) {
+        }
+
+        @Override
+        public void registerProxyListener(IProxyListener listener) {
+            proxyListener = listener;
         }
 
         @Override
@@ -1645,7 +1856,8 @@ public final class SmokeTest {
             }
             httpRequestCount++;
             lastHttpRequest = request;
-            return new FakeMessage(request, httpService, nextResponse);
+            lastHttpResult = new FakeMessage(request, httpService, nextResponse);
+            return lastHttpResult;
         }
 
         @Override
@@ -1712,6 +1924,20 @@ public final class SmokeTest {
         }
     }
 
+    private static final class FakeInterceptedProxyMessage
+            implements IInterceptedProxyMessage {
+        private final IHttpRequestResponse messageInfo;
+
+        private FakeInterceptedProxyMessage(IHttpRequestResponse messageInfo) {
+            this.messageInfo = messageInfo;
+        }
+
+        @Override
+        public IHttpRequestResponse getMessageInfo() {
+            return messageInfo;
+        }
+    }
+
     private static final class FlakyInvocation implements IContextMenuInvocation {
         private final IHttpRequestResponse[] firstMessages;
         private int calls;
@@ -1731,6 +1957,7 @@ public final class SmokeTest {
         private final byte[] request;
         private final byte[] response;
         private final IHttpService service;
+        private String highlight;
 
         private FakeMessage(byte[] request) {
             this(request, new FakeHttpService());
@@ -1776,6 +2003,28 @@ public final class SmokeTest {
             return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
         }
 
+        static FakeMessage rawBodyWithMarker() {
+            String request = ""
+                    + "POST /upload HTTP/1.1\r\n"
+                    + "Host: example.test\r\n"
+                    + "Content-Type: application/octet-stream\r\n"
+                    + "Content-Length: 12\r\n"
+                    + "\r\n"
+                    + "binary*tail*";
+            return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
+        }
+
+        static FakeMessage jsonScalarWithMarker() {
+            String request = ""
+                    + "POST /json HTTP/1.1\r\n"
+                    + "Host: example.test\r\n"
+                    + "Content-Type: application/json\r\n"
+                    + "Content-Length: 8\r\n"
+                    + "\r\n"
+                    + "{\"id\":*}";
+            return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
+        }
+
         @Override
         public byte[] getRequest() {
             return request;
@@ -1789,6 +2038,16 @@ public final class SmokeTest {
         @Override
         public IHttpService getHttpService() {
             return service;
+        }
+
+        @Override
+        public String getHighlight() {
+            return highlight;
+        }
+
+        @Override
+        public void setHighlight(String color) {
+            highlight = color;
         }
     }
 

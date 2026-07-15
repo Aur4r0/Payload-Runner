@@ -19,7 +19,9 @@ public class BurpExtender implements IBurpExtender, ITab, IContextMenuFactory {
     @Override
     public void registerExtenderCallbacks(IBurpExtenderCallbacks callbacks) {
         IExtensionHelpers helpers = callbacks.getHelpers();
-        panel = new PayloadRunnerPanel(callbacks, helpers);
+        ProxyHighlightSupport proxyHighlightSupport = new ProxyHighlightSupport(callbacks);
+        callbacks.registerProxyListener(proxyHighlightSupport);
+        panel = new PayloadRunnerPanel(callbacks, helpers, proxyHighlightSupport);
 
         callbacks.setExtensionName("Payload Runner");
         callbacks.registerContextMenuFactory(this);

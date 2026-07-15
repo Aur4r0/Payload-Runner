@@ -8,6 +8,7 @@ enum BodyKind {
     FORM_URLENCODED("表单"),
     MULTIPART("多段表单"),
     XML("XML"),
+    RAW("原始请求体"),
     UNSUPPORTED("暂不支持");
 
     private final String label;
@@ -48,6 +49,9 @@ enum BodyKind {
         if (contentType.contains("application/x-www-form-urlencoded")
                 || looksLikeFormUrlEncoded(trimmed)) {
             return FORM_URLENCODED;
+        }
+        if (body.contains("*")) {
+            return RAW;
         }
         return UNSUPPORTED;
     }

@@ -7,6 +7,9 @@ public interface IBurpExtenderCallbacks {
 
     void registerContextMenuFactory(IContextMenuFactory factory);
 
+    default void registerProxyListener(IProxyListener listener) {
+    }
+
     void addSuiteTab(ITab tab);
 
     void customizeUiComponent(Component component);

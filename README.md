@@ -13,6 +13,7 @@ parameters whose values contain `*`.
   - JSON bodies
   - `multipart/form-data`
   - XML attribute values and text nodes
+  - Multipart part content, `name`/`filename` parameters, and raw/unknown request bodies
 - Marks insertion points by finding URL/body values that contain `*`
 - YAML payload categories
 - Editable payload YAML with save/reset controls
@@ -39,6 +40,9 @@ parameters whose values contain `*`.
 - Result score column for quickly sorting higher-signal responses
 - Result table rerun actions for selected, failed, hit, or interesting rows
 - Built-in hit rule templates
+- Built-in practical hit rules matched to the bundled XSS, SQL injection, command
+  injection, boundary-value, file-read, SSRF, SSTI, CRLF, and open-redirect payloads
+- Hit result coloring in the plugin table and best-effort Burp Proxy history highlighting
 - Hit rules:
   - `keyword:admin`
   - `regex:uid=\d+`
@@ -46,6 +50,7 @@ parameters whose values contain `*`.
   - `length>1000`
   - `diff>200`
   - `sim<90`
+  - `time>=4500` or `elapsed>=4500` (milliseconds)
 - Response diff against the original Burp message response
 - Results table with endpoint, Repeater send status, interesting flag, hit, diff, status code, response length, and elapsed time
 - Click a result row to open its generated request and response in the History Viewer
@@ -76,10 +81,11 @@ sh scripts/test.sh
 
 The smoke test covers YAML parsing, marker replacement, rate presets, direct and
 Proxy transport configuration, local fake-Proxy HTTP routing, CONNECT request
-generation, per-request Proxy failure isolation, history navigation, response
+generation, per-request Proxy failure isolation, practical hit rules, elapsed-time
+rules, result-row coloring, official Proxy listener highlight correlation,
+multipart filename markers, raw-body fallbacks, history navigation, response
 truncation, scoring, profiles, rerun actions, manual Repeater sending, result
-filtering, settings persistence, CSV export, extension load output, and queue
-actions.
+filtering, settings persistence, CSV export, extension load output, and queue actions.
 
 ## Refresh Built-in Payloads
 
@@ -155,9 +161,12 @@ Sent to Repeater；上方提供过滤、手动发送到 Repeater、标记 intere
    - `响应保存上限(KB)`：每条 History 记录最多保存多少 KB 响应 bytes，默认 1024；
      状态码、长度、diff 和命中判断仍基于完整响应，Viewer/消息导出使用截断副本。
    - `命中关键词` / `命中规则`：设置响应命中规则，也可以选择模板后点击
-     `应用模板` 快速填入常见规则。
+     `应用模板` 快速填入常见规则。默认规则为“实战综合（按内置 Payload）”，
+     覆盖 XSS、SQL 注入、命令注入、边界值、文件读取、SSRF、SSTI、CRLF 和开放重定向；
+     其中 `time>=4500` 用于当前延时型 SQL/命令注入 Payload。
+   - `命中颜色`：命中结果默认使用红色；可以选择 Burp 支持的其他颜色或“不着色”。
    - `接口配置`：按 endpoint 保存/加载当前分类、编码、速率、流量去向、Proxy
-     地址和端口、命中规则、关键词、History 限制和 Repeater 前缀。
+     地址和端口、命中规则、命中颜色、关键词、History 限制和 Repeater 前缀。
 4. 点击 `运行选中项` 开始运行。
    - 运行前会按分类对 payload 去重，状态栏会显示 unique payload 数和跳过的重复数量。
 5. 在 `运行结果` 页面查看状态码、长度、耗时、命中规则、diff、重点标记和
@@ -203,7 +212,8 @@ ids: ["1", "2", "999999"]
 Payload edits and UI settings are saved through Burp extension settings.
 `恢复内置 Payload` restores the bundled `payloads.yaml` generated from
 `测试payload速取.xlsx`. Persisted UI settings include encoding, rate, traffic
-destination, Proxy host/port, max history, Repeater prefix, and Follow latest.
+destination, Proxy host/port, hit highlight color, max history, Repeater prefix,
+and Follow latest.
 
 ### 直接发送与 Burp Proxy 模式
 
@@ -223,14 +233,19 @@ Burp 内部类或内部 Swing 组件：
 - HTTPS 先向 Proxy Listener 发送 `CONNECT target-host:target-port`，再在隧道中用
   默认 JVM `SSLSocketFactory` 建立 TLS。TLS 使用真实目标主机进行 SNI 和主机名校验，
   隧道内请求使用 origin-form。
-- 插件不会注册 Proxy request handler，也不会把经过 Proxy 的请求重新加入任务，
-  因此不会由插件自身形成重复处理循环；目标服务与 Proxy 配置为完全相同的 host 和
-  port 时也会拒绝发送，以阻止明显的代理回环。
+- 插件注册的 Proxy listener 只用于关联并高亮已有 message，不会重新发送请求，也不会
+  把经过 Proxy 的请求加入任务，因此不会由插件自身形成重复处理循环；目标服务与
+  Proxy 配置为完全相同的 host 和 port 时也会拒绝发送，以阻止明显的代理回环。
 
-这些请求确实发送到配置的 Proxy Listener，但插件无法通过官方 API 强制写入 Proxy
-HTTP history。请求被 Listener 正常处理并转发时，通常会按照 Burp 自身行为出现在
-Proxy HTTP history；本项目的自动测试只使用本地假 Proxy，尚未在真实 Burp 中观察
-验证，因此不把“已进入 Proxy HTTP history”作为保证。
+这些请求确实发送到配置的 Proxy Listener，但插件无法通过官方 API 强制注入新的
+Proxy history 记录。插件会注册官方 legacy `IProxyListener`，在请求签名匹配时保留
+该 Proxy message 对象；命中后调用 `IHttpRequestResponse.setHighlight(...)` 设置
+Burp 原生高亮颜色。这个关联不添加临时 Header，也不会改变目标请求字节。若配置的
+地址不是当前 Burp 实例、Burp 未回调该请求，或请求在 Listener 中被其他逻辑重写，
+插件仍会给自己的结果表着色，但不保证 Proxy history 高亮。
+
+直接发送模式没有对应的 Proxy history 项；如果 legacy API 返回可高亮的 message
+对象，插件会尝试设置其颜色，但主要可见效果仍是插件结果表着色。
 
 插件不会关闭或绕过 Burp Proxy Intercept。Intercept 开启时，每个 Payload 请求都
 可能停在 Intercept 等待人工 Forward/Drop；大量 Payload 会产生大量拦截项，任务会
@@ -253,7 +268,11 @@ Proxy 连接超时为 10 秒，响应读取超时为 60 秒。单条连接、CON
 
 Keyword matching accepts comma, semicolon, or newline separated terms and writes
 matched terms into the result table's `Hit` column. Hit rules are editable in
-the `命中规则` panel and saved through Burp extension settings.
+the `命中规则` panel and saved through Burp extension settings. Rules are ORed:
+matching any one rule marks the result, while all matching rule labels are shown.
+`diff` is the signed response-length delta, `sim` is byte-position similarity, and
+`time`/`elapsed` is the full request elapsed time in milliseconds. The default
+practical rules are triage signals; confirm findings manually before reporting them.
 
 Response diff compares each payload response with the original response attached
 to the Burp message that was sent to Payload Runner. If the source message has

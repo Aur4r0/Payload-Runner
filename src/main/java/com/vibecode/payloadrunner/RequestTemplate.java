@@ -56,6 +56,7 @@ final class RequestTemplate {
         BodyKind bodyKind = BodyKind.UNSUPPORTED;
         if (!body.trim().isEmpty()) {
             bodyKind = BodyKind.detect(headers, body);
+            int bodyPointStart = insertionPoints.size();
             if (bodyKind == BodyKind.JSON) {
                 insertionPoints.addAll(BodyInsertionPoint.fromJson(helpers, headers, body));
             } else if (bodyKind == BodyKind.FORM_URLENCODED) {
@@ -64,6 +65,12 @@ final class RequestTemplate {
                 insertionPoints.addAll(BodyInsertionPoint.fromMultipart(helpers, headers, body));
             } else if (bodyKind == BodyKind.XML) {
                 insertionPoints.addAll(BodyInsertionPoint.fromXml(helpers, headers, body));
+            } else if (bodyKind == BodyKind.RAW) {
+                insertionPoints.addAll(BodyInsertionPoint.fromRawBody(helpers, headers, body));
+            }
+            if (body.contains("*") && insertionPoints.size() == bodyPointStart) {
+                insertionPoints.addAll(BodyInsertionPoint.fromRawBody(helpers, headers, body));
+                bodyKind = BodyKind.RAW;
             }
         }
 

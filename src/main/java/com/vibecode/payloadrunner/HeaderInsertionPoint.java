@@ -39,7 +39,7 @@ final class HeaderInsertionPoint implements PayloadInsertionPoint {
             }
             String headerName = header.substring(0, colon).trim();
             String headerValue = header.substring(colon + 1);
-            if ("content-length".equalsIgnoreCase(headerName) || !headerValue.contains("*")) {
+            if ("content-length".equalsIgnoreCase(headerName) || !PayloadMarker.contains(headerValue)) {
                 continue;
             }
             String occurrenceKey = headerName.toLowerCase(java.util.Locale.ROOT);
@@ -62,7 +62,7 @@ final class HeaderInsertionPoint implements PayloadInsertionPoint {
     @Override
     public byte[] buildRequest(String payload, EncodingStrategy encodingStrategy) {
         List<String> newHeaders = new ArrayList<String>(headers);
-        String replacement = headerValue.replace("*", encodingStrategy.encode(helpers, payload));
+        String replacement = PayloadMarker.replaceRegions(headerValue, encodingStrategy.encode(helpers, payload));
         newHeaders.set(headerIndex, headerName + ":" + replacement);
         return helpers.buildHttpMessage(newHeaders, helpers.stringToBytes(body));
     }

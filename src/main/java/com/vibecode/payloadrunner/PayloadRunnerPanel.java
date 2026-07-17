@@ -17,6 +17,7 @@ import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -128,6 +129,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JButton sendSelectedRepeaterButton = new JButton("发送选中项到 Repeater");
     private final JButton sendInterestingRepeaterButton = new JButton("发送重点项到 Repeater");
     private final JButton markInterestingButton = new JButton("标记为重点");
+    private final JButton markSelectionButton = new JButton("标记选中(§)");
+    private final JButton clearMarkersButton = new JButton("清除标记");
+    private final JButton applyMessageEditButton = new JButton("应用报文修改");
     private final JCheckBox followLatestCheckBox = new JCheckBox("自动跟随最新结果", true);
     private final JComboBox<EncodingStrategy> encodingCombo =
             new JComboBox<EncodingStrategy>(EncodingStrategy.values());
@@ -164,6 +168,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     private final JLabel historyPayloadLabel = new JLabel("Payload：-");
     private final IMessageEditor requestViewer;
     private final IMessageEditor responseViewer;
+    private final IMessageEditor markerEditor;
     private JTabbedPane mainTabs;
 
     private final Object pauseLock = new Object();
@@ -190,6 +195,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         this.proxyHighlightSupport = proxyHighlightSupport;
         this.requestViewer = callbacks.createMessageEditor(this, false);
         this.responseViewer = callbacks.createMessageEditor(this, false);
+        this.markerEditor = callbacks.createMessageEditor(this, true);
 
         loadSavedPayloads();
         loadSavedRules();
@@ -210,21 +216,19 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         }
 
         int added = 0;
-        int skippedNoMarker = 0;
         int skippedError = 0;
         int firstAddedIndex = -1;
         int lastAddedIndex = -1;
+        int unmarkedAdded = 0;
         String lastSkipReason = "";
         for (IHttpRequestResponse message : messages) {
             try {
                 RequestTemplate template = RequestTemplate.fromMessage(helpers, message);
-                if (template.getInsertionPoints().isEmpty()) {
-                    skippedNoMarker++;
-                    lastSkipReason = "没有在 URL 路径、查询参数、Header 或请求体中找到“*”标记。";
-                    continue;
-                }
                 int addedIndex = requestModel.size();
                 requestModel.addElement(template);
+                if (template.getInsertionPoints().isEmpty()) {
+                    unmarkedAdded++;
+                }
                 if (firstAddedIndex < 0) {
                     firstAddedIndex = addedIndex;
                 }
@@ -238,12 +242,16 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             }
         }
 
-        String summary = "已添加 " + added + " 个请求，跳过 " + skippedNoMarker + " 个无标记请求";
+        String summary = "已添加 " + added + " 个请求";
+        if (unmarkedAdded > 0) {
+            summary += "（其中 " + unmarkedAdded
+                    + " 个尚未标记，可在下方报文编辑器选中位置后点“标记选中(§)”）";
+        }
         if (skippedError > 0) {
             summary += "，另有 " + skippedError + " 个请求解析失败";
         }
         if (!lastSkipReason.isEmpty()) {
-            summary += "。最后一次跳过原因：" + lastSkipReason;
+            summary += "。最后一次失败原因：" + lastSkipReason;
         } else {
             summary += "。";
         }
@@ -282,10 +290,32 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         requestList.setVisibleRowCount(7);
         requestList.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         installRequestQueueActions();
-        JPanel requestPanel = new JPanel(new BorderLayout(4, 4));
-        requestPanel.setBorder(BorderFactory.createTitledBorder("待执行请求"));
-        requestPanel.add(new JScrollPane(requestList), BorderLayout.CENTER);
-        requestPanel.setMinimumSize(new Dimension(360, 150));
+        JPanel requestListPanel = new JPanel(new BorderLayout(4, 4));
+        requestListPanel.setBorder(BorderFactory.createTitledBorder("待执行请求"));
+        requestListPanel.add(new JScrollPane(requestList), BorderLayout.CENTER);
+        requestListPanel.setMinimumSize(new Dimension(280, 200));
+        requestListPanel.setPreferredSize(new Dimension(320, 200));
+
+        JPanel markerButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
+        markSelectionButton.setEnabled(false);
+        clearMarkersButton.setEnabled(false);
+        applyMessageEditButton.setEnabled(false);
+        markerButtonPanel.add(new JLabel("选中报文中的注入位置后："));
+        markerButtonPanel.add(markSelectionButton);
+        markerButtonPanel.add(clearMarkersButton);
+        markerButtonPanel.add(applyMessageEditButton);
+        JPanel markerPanel = new JPanel(new BorderLayout(4, 4));
+        markerPanel.setBorder(BorderFactory.createTitledBorder("请求报文（选中文本 → 标记注入点）"));
+        markerPanel.add(markerEditor.getComponent(), BorderLayout.CENTER);
+        markerPanel.add(markerButtonPanel, BorderLayout.SOUTH);
+        markerPanel.setMinimumSize(new Dimension(420, 200));
+
+        JSplitPane markerPageSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT,
+                requestListPanel, markerPanel);
+        markerPageSplit.setResizeWeight(0.32);
+        markerPageSplit.setContinuousLayout(true);
+        JPanel markerPage = new JPanel(new BorderLayout(6, 6));
+        markerPage.add(markerPageSplit, BorderLayout.CENTER);
 
         rulesArea.setLineWrap(false);
         JPanel rulesPanel = new JPanel(new BorderLayout(4, 4));
@@ -304,16 +334,10 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
 
         JSplitPane rulesCategorySplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
                 rulesPanel, categoryPanel);
-        rulesCategorySplit.setResizeWeight(0.58);
+        rulesCategorySplit.setResizeWeight(0.55);
         rulesCategorySplit.setContinuousLayout(true);
-        rulesCategorySplit.setMinimumSize(new Dimension(380, 300));
-
-        JSplitPane sideSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
-                rulesCategorySplit, requestPanel);
-        sideSplit.setResizeWeight(0.58);
-        sideSplit.setContinuousLayout(true);
-        sideSplit.setMinimumSize(new Dimension(420, 460));
-        sideSplit.setPreferredSize(new Dimension(560, 520));
+        rulesCategorySplit.setMinimumSize(new Dimension(380, 320));
+        rulesCategorySplit.setPreferredSize(new Dimension(460, 480));
 
         JPanel configButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
         JPanel trafficButtonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 0));
@@ -363,7 +387,8 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         runnerControlPanel.add(configRows, BorderLayout.CENTER);
 
         JPanel runnerPage = new JPanel(new BorderLayout(6, 6));
-        JSplitPane configSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, yamlPanel, sideSplit);
+        JSplitPane configSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, yamlPanel,
+                rulesCategorySplit);
         configSplit.setResizeWeight(0.52);
         configSplit.setContinuousLayout(true);
         runnerPage.add(configSplit, BorderLayout.CENTER);
@@ -440,6 +465,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         resultsPage.add(lowerSplit, BorderLayout.CENTER);
 
         mainTabs = new JTabbedPane();
+        mainTabs.addTab("请求标记", markerPage);
         mainTabs.addTab("任务配置", runnerPage);
         mainTabs.addTab("运行结果", resultsPage);
 
@@ -517,6 +543,9 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         });
         followLatestCheckBox.addActionListener(event -> saveUiSettings());
         markInterestingButton.addActionListener(event -> toggleInteresting());
+        markSelectionButton.addActionListener(event -> markEditorSelection());
+        clearMarkersButton.addActionListener(event -> clearEditorMarkers());
+        applyMessageEditButton.addActionListener(event -> applyMarkerEditorEdits());
         sendCurrentRepeaterButton.addActionListener(event -> sendCurrentToRepeater());
         sendSelectedRepeaterButton.addActionListener(event -> sendSelectedRowsToRepeater());
         sendInterestingRepeaterButton.addActionListener(event -> sendInterestingToRepeater());
@@ -559,6 +588,12 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
     }
 
     private void installRequestQueueActions() {
+        requestList.addListSelectionListener(event -> {
+            if (!event.getValueIsAdjusting()) {
+                loadSelectedRequestIntoEditor();
+            }
+        });
+
         final JPopupMenu popup = new JPopupMenu();
         final JMenuItem deleteItem = new JMenuItem("删除选中请求");
         deleteItem.addActionListener(event -> deleteSelectedRequests());
@@ -629,6 +664,117 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             requestList.setSelectedIndex(Math.min(nextSelection, requestModel.size() - 1));
         }
         statusLabel.setText("已删除 " + selected.length + " 个待执行请求。");
+    }
+
+    private void loadSelectedRequestIntoEditor() {
+        int[] selected = requestList.getSelectedIndices();
+        boolean single = selected.length == 1;
+        markSelectionButton.setEnabled(single);
+        clearMarkersButton.setEnabled(single);
+        applyMessageEditButton.setEnabled(single);
+        if (single) {
+            RequestTemplate template = requestModel.getElementAt(selected[0]);
+            markerEditor.setMessage(template.getRequestBytes(), true);
+        } else {
+            markerEditor.setMessage(null, true);
+        }
+    }
+
+    private void markEditorSelection() {
+        int index = singleSelectedRequestIndex();
+        if (index < 0) {
+            return;
+        }
+        byte[] message = markerEditor.getMessage();
+        if (message == null) {
+            statusLabel.setText("请求报文为空，无法标记。");
+            return;
+        }
+        int[] bounds = markerEditor.getSelectionBounds();
+        if (bounds == null || bounds.length < 2) {
+            statusLabel.setText("请先在报文中选中要注入的位置。");
+            return;
+        }
+        int start = Math.max(0, Math.min(bounds[0], bounds[1]));
+        int end = Math.min(message.length, Math.max(bounds[0], bounds[1]));
+        if (start > message.length) {
+            statusLabel.setText("请先在报文中选中要注入的位置。");
+            return;
+        }
+        byte[] marker = helpers.stringToBytes(PayloadMarker.MARKER);
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream(message.length + marker.length * 2);
+        buffer.write(message, 0, start);
+        buffer.write(marker, 0, marker.length);
+        buffer.write(message, start, end - start);
+        buffer.write(marker, 0, marker.length);
+        buffer.write(message, end, message.length - end);
+        byte[] marked = buffer.toByteArray();
+        markerEditor.setMessage(marked, true);
+        rebuildRequestFromEditor(index, marked, start == end
+                ? "已插入注入点标记 §§。"
+                : "已用 § 包裹选中内容。");
+    }
+
+    private void applyMarkerEditorEdits() {
+        int index = singleSelectedRequestIndex();
+        if (index < 0) {
+            return;
+        }
+        byte[] message = markerEditor.getMessage();
+        if (message == null) {
+            statusLabel.setText("请求报文为空，无法应用。");
+            return;
+        }
+        rebuildRequestFromEditor(index, message, "已应用报文修改。");
+    }
+
+    private void clearEditorMarkers() {
+        int index = singleSelectedRequestIndex();
+        if (index < 0) {
+            return;
+        }
+        byte[] message = markerEditor.getMessage();
+        if (message == null) {
+            statusLabel.setText("请求报文为空，无标记可清除。");
+            return;
+        }
+        String text = helpers.bytesToString(message);
+        if (!text.contains(PayloadMarker.MARKER)) {
+            statusLabel.setText("当前报文没有 § 标记。");
+            return;
+        }
+        byte[] cleared = helpers.stringToBytes(PayloadMarker.stripMarkers(text));
+        markerEditor.setMessage(cleared, true);
+        rebuildRequestFromEditor(index, cleared, "已清除全部 § 标记。");
+    }
+
+    private int singleSelectedRequestIndex() {
+        if (isRunnerActive()) {
+            statusLabel.setText("请先停止当前任务，再修改待执行请求。");
+            return -1;
+        }
+        int[] selected = requestList.getSelectedIndices();
+        if (selected.length != 1) {
+            statusLabel.setText("请先在待执行列表中选择单个请求。");
+            return -1;
+        }
+        return selected[0];
+    }
+
+    private void rebuildRequestFromEditor(int index, byte[] requestBytes, String successPrefix) {
+        RequestTemplate current = requestModel.getElementAt(index);
+        try {
+            RequestTemplate rebuilt = RequestTemplate.fromRequestBytes(helpers,
+                    current.getService(), requestBytes, current.getBaselineResponse());
+            requestModel.setElementAt(rebuilt, index);
+            requestList.setSelectedIndex(index);
+            statusLabel.setText(successPrefix + "当前请求有 "
+                    + rebuilt.getInsertionPoints().size() + " 个标记点。");
+        } catch (RuntimeException ex) {
+            statusLabel.setText("解析修改后的报文失败：" + (ex.getMessage() == null
+                    ? ex.getClass().getSimpleName()
+                    : ex.getMessage()));
+        }
     }
 
     private void installResultTableActions() {
@@ -1600,6 +1746,18 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             return;
         }
 
+        int unmarked = 0;
+        for (RequestTemplate request : requests) {
+            if (request.getInsertionPoints().isEmpty()) {
+                unmarked++;
+            }
+        }
+        if (unmarked > 0) {
+            statusLabel.setText("有 " + unmarked
+                    + " 个请求尚未标记注入点，请在报文编辑器中选中要注入的位置并点“标记选中(§)”后再运行。");
+            return;
+        }
+
         Map<String, List<String>> selectedPayloads = new LinkedHashMap<String, List<String>>();
         final EncodingStrategy encodingStrategy =
                 (EncodingStrategy) encodingCombo.getSelectedItem();
@@ -1666,7 +1824,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
                 + rateLimit + "（" + planSummary + duplicateSummary(duplicatePayloadsSkipped)
                 + "）……");
         if (mainTabs != null) {
-            mainTabs.setSelectedIndex(1);
+            mainTabs.setSelectedIndex(2);
         }
 
         activeWorker = new SwingWorker<Void, RunnerResult>() {
@@ -1806,7 +1964,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         statusLabel.setText("正在重新运行" + label + "：0 / " + totalRequests
                 + "，速率：" + rateLimit + skippedSummary + "……");
         if (mainTabs != null) {
-            mainTabs.setSelectedIndex(1);
+            mainTabs.setSelectedIndex(2);
         }
 
         activeWorker = new SwingWorker<Void, RunnerResult>() {

@@ -41,7 +41,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 int valueStart = cursor + equals + 1;
                 int valueEnd = end;
                 String decodedValue = safeUrlDecode(helpers, rawValue);
-                if (rawValue.contains("*") || decodedValue.contains("*")) {
+                if (PayloadMarker.contains(rawValue) || PayloadMarker.contains(decodedValue)) {
                     String decodedName = safeUrlDecode(helpers, rawName);
                     points.add(new BodyInsertionPoint(helpers, headers, decodedName,
                             (payload, encodingStrategy) -> replaceFormValue(helpers, body,
@@ -67,7 +67,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 lastKey = token.getValue();
                 continue;
             }
-            if (token.getValue().contains("*")) {
+            if (PayloadMarker.contains(token.getValue())) {
                 String name = lastKey == null || lastKey.isEmpty()
                         ? "json@" + token.getStart()
                         : lastKey;
@@ -110,7 +110,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 int contentEnd = trimPartTerminator(body, contentStart, nextMarker);
                 if (contentStart <= contentEnd) {
                     String content = body.substring(contentStart, contentEnd);
-                    if (content.contains("*")) {
+                    if (PayloadMarker.contains(content)) {
                         final int start = contentStart;
                         final int end = contentEnd;
                         points.add(new BodyInsertionPoint(helpers, headers, "multipart:" + name,
@@ -127,9 +127,9 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
     static List<BodyInsertionPoint> fromRawBody(IExtensionHelpers helpers, List<String> headers,
             String body) {
         List<BodyInsertionPoint> points = new ArrayList<BodyInsertionPoint>();
-        if (body != null && body.contains("*")) {
+        if (body != null && PayloadMarker.contains(body)) {
             points.add(new BodyInsertionPoint(helpers, headers, "body:raw",
-                    (payload, encodingStrategy) -> body.replace("*",
+                    (payload, encodingStrategy) -> PayloadMarker.replaceRegions(body,
                             encodingStrategy.encode(helpers, payload))));
         }
         return points;
@@ -158,10 +158,10 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
             int valueEnd, String rawValue, String decodedValue, String payload,
             EncodingStrategy encodingStrategy) {
         String newRawValue;
-        if (rawValue.contains("*")) {
-            newRawValue = rawValue.replace("*", encodingStrategy.encode(helpers, payload));
+        if (PayloadMarker.contains(rawValue)) {
+            newRawValue = PayloadMarker.replaceRegions(rawValue, encodingStrategy.encode(helpers, payload));
         } else {
-            newRawValue = encodeWholeValue(helpers, decodedValue.replace("*", payload),
+            newRawValue = encodeWholeValue(helpers, PayloadMarker.replaceRegions(decodedValue, payload),
                     encodingStrategy);
         }
         return body.substring(0, valueStart) + newRawValue + body.substring(valueEnd);
@@ -169,14 +169,14 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
 
     private static String replaceJsonString(IExtensionHelpers helpers, String body,
             JsonStringToken token, String payload, EncodingStrategy encodingStrategy) {
-        String newValue = token.getValue().replace("*", payload);
+        String newValue = PayloadMarker.replaceRegions(token.getValue(), payload);
         if (encodingStrategy == EncodingStrategy.RAW) {
             return body.substring(0, token.getStart() + 1)
                     + newValue
                     + body.substring(token.getEnd() - 1);
         }
         if (encodingStrategy == EncodingStrategy.URL_ENCODE) {
-            newValue = token.getValue().replace("*", encodingStrategy.encode(helpers, payload));
+            newValue = PayloadMarker.replaceRegions(token.getValue(), encodingStrategy.encode(helpers, payload));
         }
         return body.substring(0, token.getStart())
                 + JsonStrings.quote(newValue)
@@ -198,7 +198,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
             int end, String payload, EncodingStrategy encodingStrategy) {
         String value = body.substring(start, end);
         return body.substring(0, start)
-                + value.replace("*", encodingStrategy.encode(helpers, payload))
+                + PayloadMarker.replaceRegions(value, encodingStrategy.encode(helpers, payload))
                 + body.substring(end);
     }
 
@@ -238,7 +238,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                         break;
                     }
                     String value = body.substring(quoteStart + 1, quoteEnd);
-                    if (value.contains("*")) {
+                    if (PayloadMarker.contains(value)) {
                         String attrName = body.substring(nameStart, nameEnd).trim();
                         final int start = quoteStart + 1;
                         final int end = quoteEnd;
@@ -264,7 +264,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 break;
             }
             String text = body.substring(textStart, textEnd);
-            if (text.contains("*")) {
+            if (PayloadMarker.contains(text)) {
                 String name = xmlTextElementName(body, textStart);
                 final int start = textStart;
                 final int end = textEnd;
@@ -380,7 +380,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 while (matcher.find()) {
                     int group = matchedValueGroup(matcher);
                     String parameterValue = matcher.group(group);
-                    if (parameterValue != null && parameterValue.contains("*")) {
+                    if (parameterValue != null && PayloadMarker.contains(parameterValue)) {
                         String parameter = matcher.group(1).toLowerCase(Locale.ROOT);
                         int start = partStart + lineStart + colon + 1 + matcher.start(group);
                         int end = partStart + lineStart + colon + 1 + matcher.end(group);
@@ -398,7 +398,7 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
     }
 
     private static String safeMultipartFieldName(String fieldName) {
-        return fieldName == null || fieldName.isEmpty() || fieldName.contains("*")
+        return fieldName == null || fieldName.isEmpty() || fieldName.contains(PayloadMarker.MARKER)
                 ? "file"
                 : fieldName;
     }

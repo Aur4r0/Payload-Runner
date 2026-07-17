@@ -12,5 +12,7 @@ public interface IMessageEditor {
     boolean isMessageModified();
 
     byte[] getSelectedData();
+
+    int[] getSelectionBounds();
 }
 

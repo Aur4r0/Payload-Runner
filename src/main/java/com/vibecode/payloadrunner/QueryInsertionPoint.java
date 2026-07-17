@@ -55,7 +55,7 @@ final class QueryInsertionPoint implements PayloadInsertionPoint {
                 int valueStart = queryStart + 1 + cursor + equals + 1;
                 int valueEnd = queryStart + 1 + end;
                 String decodedValue = safeUrlDecode(helpers, rawValue);
-                if (rawValue.contains("*") || decodedValue.contains("*")) {
+                if (PayloadMarker.contains(rawValue) || PayloadMarker.contains(decodedValue)) {
                     String decodedName = safeUrlDecode(helpers, rawName);
                     points.add(new QueryInsertionPoint(helpers, headers, body,
                             "url:" + decodedName,
@@ -94,10 +94,10 @@ final class QueryInsertionPoint implements PayloadInsertionPoint {
             int valueStart, int valueEnd, String rawValue, String decodedValue, String payload,
             EncodingStrategy encodingStrategy) {
         String newRawValue;
-        if (rawValue.contains("*")) {
-            newRawValue = rawValue.replace("*", encodingStrategy.encode(helpers, payload));
+        if (PayloadMarker.contains(rawValue)) {
+            newRawValue = PayloadMarker.replaceRegions(rawValue, encodingStrategy.encode(helpers, payload));
         } else {
-            newRawValue = encodeWholeValue(helpers, decodedValue.replace("*", payload),
+            newRawValue = encodeWholeValue(helpers, PayloadMarker.replaceRegions(decodedValue, payload),
                     encodingStrategy);
         }
         return target.substring(0, valueStart) + newRawValue + target.substring(valueEnd);

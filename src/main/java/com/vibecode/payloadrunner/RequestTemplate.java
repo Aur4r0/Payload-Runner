@@ -16,17 +16,19 @@ final class RequestTemplate {
     private final String host;
     private final String path;
     private final String bodyType;
+    private final byte[] requestBytes;
     private final byte[] baselineResponse;
     private final List<PayloadInsertionPoint> insertionPoints;
 
     private RequestTemplate(IHttpService service, String method, String host, String path,
-            String bodyType, byte[] baselineResponse,
+            String bodyType, byte[] requestBytes, byte[] baselineResponse,
             List<PayloadInsertionPoint> insertionPoints) {
         this.service = service;
         this.method = method;
         this.host = host;
         this.path = path;
         this.bodyType = bodyType;
+        this.requestBytes = requestBytes;
         this.baselineResponse = baselineResponse;
         this.insertionPoints = insertionPoints;
     }
@@ -35,9 +37,17 @@ final class RequestTemplate {
         if (message == null || message.getRequest() == null) {
             throw new IllegalArgumentException("请求报文不完整。");
         }
+        return fromRequestBytes(helpers, message.getHttpService(), message.getRequest(),
+                message.getResponse());
+    }
 
-        byte[] request = Arrays.copyOf(message.getRequest(), message.getRequest().length);
-        IHttpService service = message.getHttpService();
+    static RequestTemplate fromRequestBytes(IExtensionHelpers helpers, IHttpService service,
+            byte[] requestBytes, byte[] responseBytes) {
+        if (requestBytes == null) {
+            throw new IllegalArgumentException("请求报文不完整。");
+        }
+
+        byte[] request = Arrays.copyOf(requestBytes, requestBytes.length);
         IRequestInfo requestInfo = service == null
                 ? helpers.analyzeRequest(request)
                 : helpers.analyzeRequest(service, request);
@@ -70,18 +80,18 @@ final class RequestTemplate {
             } else if (bodyKind == BodyKind.RAW) {
                 insertionPoints.addAll(BodyInsertionPoint.fromRawBody(helpers, headers, body));
             }
-            if (body.contains("*") && insertionPoints.size() == bodyPointStart) {
+            if (PayloadMarker.contains(body) && insertionPoints.size() == bodyPointStart) {
                 insertionPoints.addAll(BodyInsertionPoint.fromRawBody(helpers, headers, body));
                 bodyKind = BodyKind.RAW;
             }
         }
 
-        byte[] baselineResponse = message.getResponse() == null
+        byte[] baselineResponse = responseBytes == null
                 ? null
-                : Arrays.copyOf(message.getResponse(), message.getResponse().length);
+                : Arrays.copyOf(responseBytes, responseBytes.length);
         return new RequestTemplate(service, safeMethod(requestInfo), safeHost(service, requestInfo),
-                safePath(requestInfo), bodyLabel(bodyKind, body, insertionPoints), baselineResponse,
-                insertionPoints);
+                safePath(requestInfo), bodyLabel(bodyKind, body, insertionPoints), request,
+                baselineResponse, insertionPoints);
     }
 
     IHttpService getService() {
@@ -102,6 +112,10 @@ final class RequestTemplate {
 
     List<PayloadInsertionPoint> getInsertionPoints() {
         return insertionPoints;
+    }
+
+    byte[] getRequestBytes() {
+        return requestBytes;
     }
 
     byte[] getBaselineResponse() {

@@ -50,7 +50,7 @@ enum BodyKind {
                 || looksLikeFormUrlEncoded(trimmed)) {
             return FORM_URLENCODED;
         }
-        if (body.contains("*")) {
+        if (PayloadMarker.contains(body)) {
             return RAW;
         }
         return UNSUPPORTED;

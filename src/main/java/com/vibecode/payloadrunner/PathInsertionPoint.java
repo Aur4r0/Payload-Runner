@@ -55,7 +55,7 @@ final class PathInsertionPoint implements PayloadInsertionPoint {
             if (!rawSegment.isEmpty()) {
                 segmentIndex++;
                 String decodedSegment = safeUrlDecode(helpers, rawSegment);
-                if (rawSegment.contains("*") || decodedSegment.contains("*")) {
+                if (PayloadMarker.contains(rawSegment) || PayloadMarker.contains(decodedSegment)) {
                     final int valueStart = pathStart + cursor;
                     final int valueEnd = pathStart + end;
                     final String originalRaw = rawSegment;
@@ -96,10 +96,10 @@ final class PathInsertionPoint implements PayloadInsertionPoint {
             int valueStart, int valueEnd, String rawSegment, String decodedSegment,
             String payload, EncodingStrategy encodingStrategy) {
         String replacement;
-        if (rawSegment.contains("*")) {
-            replacement = rawSegment.replace("*", encodingStrategy.encode(helpers, payload));
+        if (PayloadMarker.contains(rawSegment)) {
+            replacement = PayloadMarker.replaceRegions(rawSegment, encodingStrategy.encode(helpers, payload));
         } else {
-            replacement = encodeWholeValue(helpers, decodedSegment.replace("*", payload),
+            replacement = encodeWholeValue(helpers, PayloadMarker.replaceRegions(decodedSegment, payload),
                     encodingStrategy);
         }
         return target.substring(0, valueStart) + replacement + target.substring(valueEnd);

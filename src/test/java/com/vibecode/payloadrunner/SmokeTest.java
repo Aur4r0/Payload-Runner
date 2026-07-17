@@ -59,6 +59,8 @@ public final class SmokeTest {
     public static void main(String[] args) throws Exception {
         testYamlParser();
         testDefaultPayloadResource();
+        testPayloadMarker();
+        testAcceptHeaderNotMarked();
         testQueryInsertionPoints();
         testPathInsertionPoints();
         testHeaderInsertionPoints();
@@ -106,6 +108,10 @@ public final class SmokeTest {
         testQueuedRequestDeleteSelected();
         testNewlyQueuedRequestsBecomeSelected();
         testResultSelectionUsesSortedViewRow();
+        testRawRequestAcceptedIntoQueue();
+        testMarkSelectionInsertsPair();
+        testClearMarkersRemovesAllPoints();
+        testRunBlocksUnmarkedRequest();
         System.out.println("Smoke tests passed");
     }
 
@@ -132,49 +138,193 @@ public final class SmokeTest {
         assertEquals(true, payloads.get("XSS").size() > 0, "default XSS payloads");
     }
 
+    private static void testPayloadMarker() {
+        assertEquals(true, PayloadMarker.contains("§§"), "empty pair is a region");
+        assertEquals(true, PayloadMarker.contains("pre§x§post"), "wrapped region detected");
+        assertEquals(false, PayloadMarker.contains("a§b"), "lone delimiter is not a region");
+        assertEquals(false, PayloadMarker.contains("*/*"), "star content is not a marker");
+        assertEquals(false, PayloadMarker.contains(""), "empty string has no region");
+        assertEquals(false, PayloadMarker.contains(null), "null has no region");
+
+        assertEquals("preXpost", PayloadMarker.replaceRegions("pre§§post", "X"),
+                "empty pair replaced");
+        assertEquals("preXpost", PayloadMarker.replaceRegions("pre§abc§post", "X"),
+                "wrapped region replaced whole");
+        assertEquals("aXbXc", PayloadMarker.replaceRegions("a§1§b§2§c", "X"),
+                "two regions replaced");
+        assertEquals("a§b", PayloadMarker.replaceRegions("a§b", "X"),
+                "lone delimiter preserved");
+        assertEquals("*/*", PayloadMarker.replaceRegions("*/*", "X"),
+                "star content untouched");
+
+        assertEquals("prepost", PayloadMarker.stripMarkers("pre§§post"),
+                "empty pair markers stripped");
+        assertEquals("preabcpost", PayloadMarker.stripMarkers("pre§abc§post"),
+                "wrapped markers stripped, content kept");
+        assertEquals("a1b2c", PayloadMarker.stripMarkers("a§1§b§2§c"),
+                "all markers stripped");
+        assertEquals("plain", PayloadMarker.stripMarkers("plain"),
+                "no markers unchanged");
+    }
+
+    private static void testAcceptHeaderNotMarked() {
+        FakeHelpers helpers = new FakeHelpers();
+        List<String> headers = Arrays.asList(
+                "GET /search HTTP/1.1",
+                "Host: example.test",
+                "Accept: */*",
+                "Accept-Encoding: text/*",
+                "X-Custom: a*b");
+        List<HeaderInsertionPoint> points = HeaderInsertionPoint.fromHeaders(helpers, headers, "");
+        assertEquals(0, points.size(), "headers containing bare stars are not marked");
+    }
+
+    private static void testRawRequestAcceptedIntoQueue() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                panel.addRequests(new IHttpRequestResponse[] {
+                        FakeMessage.rawRequestWithoutMarker()});
+                @SuppressWarnings("unchecked")
+                DefaultListModel<RequestTemplate> requestModel =
+                        (DefaultListModel<RequestTemplate>) privateField(panel, "requestModel");
+                assertEquals(1, requestModel.size(), "raw request accepted into queue");
+                assertEquals(0, requestModel.getElementAt(0).getInsertionPoints().size(),
+                        "raw request has no insertion points yet");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testMarkSelectionInsertsPair() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                panel.addRequests(new IHttpRequestResponse[] {
+                        FakeMessage.rawRequestWithoutMarker()});
+                @SuppressWarnings("unchecked")
+                JList<RequestTemplate> requestList =
+                        (JList<RequestTemplate>) privateField(panel, "requestList");
+                @SuppressWarnings("unchecked")
+                DefaultListModel<RequestTemplate> requestModel =
+                        (DefaultListModel<RequestTemplate>) privateField(panel, "requestModel");
+                FakeMessageEditor markerEditor =
+                        (FakeMessageEditor) privateField(panel, "markerEditor");
+
+                requestList.setSelectedIndex(0);
+                String message = callbacks.helpers.bytesToString(markerEditor.getMessage());
+                int start = message.indexOf("id=") + 3;
+                int end = message.indexOf(' ', start);
+                markerEditor.selectionBounds = new int[] {start, end};
+                invokePrivate(panel, "markEditorSelection", new Class<?>[0]);
+
+                String marked = callbacks.helpers.bytesToString(markerEditor.getMessage());
+                assertContains(marked, "id=§1§", "selection wrapped in marker pair");
+                assertEquals(1, requestModel.getElementAt(0).getInsertionPoints().size(),
+                        "marked request has one insertion point");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testClearMarkersRemovesAllPoints() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                panel.addRequests(new IHttpRequestResponse[] {
+                        FakeMessage.rawRequestWithoutMarker()});
+                @SuppressWarnings("unchecked")
+                JList<RequestTemplate> requestList =
+                        (JList<RequestTemplate>) privateField(panel, "requestList");
+                @SuppressWarnings("unchecked")
+                DefaultListModel<RequestTemplate> requestModel =
+                        (DefaultListModel<RequestTemplate>) privateField(panel, "requestModel");
+                FakeMessageEditor markerEditor =
+                        (FakeMessageEditor) privateField(panel, "markerEditor");
+
+                requestList.setSelectedIndex(0);
+                String message = callbacks.helpers.bytesToString(markerEditor.getMessage());
+                int start = message.indexOf("id=") + 3;
+                int end = message.indexOf(' ', start);
+                markerEditor.selectionBounds = new int[] {start, end};
+                invokePrivate(panel, "markEditorSelection", new Class<?>[0]);
+                assertEquals(1, requestModel.getElementAt(0).getInsertionPoints().size(),
+                        "request marked before clear");
+
+                invokePrivate(panel, "clearEditorMarkers", new Class<?>[0]);
+                String cleared = callbacks.helpers.bytesToString(markerEditor.getMessage());
+                assertEquals(false, cleared.contains("§"), "all markers stripped from message");
+                assertEquals(0, requestModel.getElementAt(0).getInsertionPoints().size(),
+                        "cleared request has no insertion points");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testRunBlocksUnmarkedRequest() throws Exception {
+        final FakeCallbacks callbacks = new FakeCallbacks();
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                panel.addRequests(new IHttpRequestResponse[] {
+                        FakeMessage.rawRequestWithoutMarker()});
+                @SuppressWarnings("unchecked")
+                JList<String> categories = (JList<String>) privateField(panel, "categoryList");
+                categories.setSelectedIndex(indexOfCategory(categories, "XSS"));
+                invokePrivate(panel, "runSelectedCategories", new Class<?>[0]);
+
+                assertEquals(true, privateField(panel, "activeWorker") == null,
+                        "unmarked request does not start a worker");
+                JLabel statusLabel = (JLabel) privateField(panel, "statusLabel");
+                assertContains(statusLabel.getText(), "尚未标记注入点",
+                        "unmarked run shows blocking message");
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
     private static void testQueryInsertionPoints() {
         FakeHelpers helpers = new FakeHelpers();
         List<String> headers = Arrays.asList(
-                "POST /submit?name=pre*post&encoded=%2A HTTP/1.1",
+                "POST /submit?name=pre§§post&encoded=%2A HTTP/1.1",
                 "Host: example.test");
         List<QueryInsertionPoint> points = QueryInsertionPoint.fromRequestLine(helpers, headers, "");
 
-        assertEquals(2, points.size(), "query marker count");
+        assertEquals(1, points.size(), "query marker count");
         assertEquals("url:name", points.get(0).getName(), "query parameter name");
 
         String firstRequest = helpers.bytesToString(points.get(0).buildRequest("A B"));
         assertContains(firstRequest, "POST /submit?name=preA+Bpost&encoded=%2A HTTP/1.1",
                 "raw query replacement");
-
-        String secondRequest = helpers.bytesToString(points.get(1).buildRequest("x/y"));
-        assertContains(secondRequest, "POST /submit?name=pre*post&encoded=x%2Fy HTTP/1.1",
-                "decoded query replacement");
     }
 
     private static void testPathInsertionPoints() {
         FakeHelpers helpers = new FakeHelpers();
         List<String> headers = Arrays.asList(
-                "GET /api/users/parameter*/detail?id=* HTTP/1.1",
+                "GET /api/users/parameter§§/detail?id=§§ HTTP/1.1",
                 "Host: example.test");
         List<PathInsertionPoint> points = PathInsertionPoint.fromRequestLine(helpers, headers, "");
         assertEquals(1, points.size(), "path marker count");
         assertEquals("url:path[3]", points.get(0).getName(), "path marker name");
         String request = helpers.bytesToString(points.get(0)
                 .buildRequest("A/B", EncodingStrategy.URL_ENCODE));
-        assertContains(request, "GET /api/users/parameterA%2FB/detail?id=* HTTP/1.1",
+        assertContains(request, "GET /api/users/parameterA%2FB/detail?id=§§ HTTP/1.1",
                 "path marker replacement keeps query");
 
         List<String> absoluteHeaders = Arrays.asList(
-                "GET http://example.test/root/%2A/end?next=* HTTP/1.1",
+                "GET http://example.test/root/%2A/end?next=§§ HTTP/1.1",
                 "Host: example.test");
         List<PathInsertionPoint> encodedPoints = PathInsertionPoint.fromRequestLine(
                 helpers, absoluteHeaders, "");
-        assertEquals(1, encodedPoints.size(), "encoded absolute path marker count");
-        String encodedRequest = helpers.bytesToString(encodedPoints.get(0)
-                .buildRequest("value", EncodingStrategy.URL_ENCODE));
-        assertContains(encodedRequest,
-                "GET http://example.test/root/value/end?next=* HTTP/1.1",
-                "encoded absolute path marker replacement");
+        assertEquals(0, encodedPoints.size(),
+                "percent-encoded star is no longer a marker");
     }
 
     private static void testHeaderInsertionPoints() {
@@ -182,9 +332,10 @@ public final class SmokeTest {
         List<String> headers = Arrays.asList(
                 "POST /submit HTTP/1.1",
                 "Host: example.test",
-                "X-Test: pre*post",
-                "Cookie: session=*",
-                "Content-Length: *");
+                "X-Test: pre§§post",
+                "Cookie: session=§§",
+                "Accept: */*",
+                "Content-Length: §§");
         List<HeaderInsertionPoint> points = HeaderInsertionPoint.fromHeaders(
                 helpers, headers, "body");
         assertEquals(2, points.size(), "header marker count");
@@ -192,18 +343,31 @@ public final class SmokeTest {
         String firstRequest = helpers.bytesToString(points.get(0)
                 .buildRequest("payload", EncodingStrategy.RAW));
         assertContains(firstRequest, "X-Test: prepayloadpost", "header marker replacement");
-        assertContains(firstRequest, "Cookie: session=*", "other header marker preserved");
+        assertContains(firstRequest, "Cookie: session=§§", "other header marker preserved");
+        assertContains(firstRequest, "Accept: */*", "accept header left untouched");
 
         String secondRequest = helpers.bytesToString(points.get(1)
                 .buildRequest("a/b", EncodingStrategy.URL_ENCODE));
         assertContains(secondRequest, "Cookie: session=a%2Fb",
                 "header marker encoding strategy");
+
+        List<String> wrappedHeaders = Arrays.asList(
+                "POST /submit HTTP/1.1",
+                "Host: example.test",
+                "X-Test: §*/*§");
+        List<HeaderInsertionPoint> wrappedPoints = HeaderInsertionPoint.fromHeaders(
+                helpers, wrappedHeaders, "body");
+        assertEquals(1, wrappedPoints.size(), "wrapped header marker count");
+        String wrappedRequest = helpers.bytesToString(wrappedPoints.get(0)
+                .buildRequest("payload", EncodingStrategy.RAW));
+        assertContains(wrappedRequest, "X-Test: payload",
+                "wrapped region replaced whole, inner stars literal");
     }
 
     private static void testEncodingStrategies() {
         FakeHelpers helpers = new FakeHelpers();
         List<String> headers = Arrays.asList(
-                "POST /submit?name=* HTTP/1.1",
+                "POST /submit?name=§§ HTTP/1.1",
                 "Host: example.test");
         List<QueryInsertionPoint> queryPoints =
                 QueryInsertionPoint.fromRequestLine(helpers, headers, "");
@@ -222,7 +386,7 @@ public final class SmokeTest {
                 "Host: example.test",
                 "Content-Type: application/json");
         List<BodyInsertionPoint> jsonPoints = BodyInsertionPoint.fromJson(
-                helpers, jsonHeaders, "{\"name\":\"*\"}");
+                helpers, jsonHeaders, "{\"name\":\"§§\"}");
 
         String rawJson = helpers.bytesToString(
                 jsonPoints.get(0).buildRequest("\"x\"", EncodingStrategy.RAW));
@@ -623,14 +787,11 @@ public final class SmokeTest {
                 "Host: example.test",
                 "Content-Type: application/x-www-form-urlencoded");
         List<BodyInsertionPoint> points = BodyInsertionPoint.fromFormUrlEncoded(
-                helpers, headers, "a=1&name=pre*post&encoded=%2A");
+                helpers, headers, "a=1&name=pre§§post&encoded=%2A");
 
-        assertEquals(2, points.size(), "form marker count");
+        assertEquals(1, points.size(), "form marker count");
         String firstRequest = helpers.bytesToString(points.get(0).buildRequest("A B"));
-        assertContains(firstRequest, "name=preA+Bpost", "raw star replacement");
-
-        String secondRequest = helpers.bytesToString(points.get(1).buildRequest("x/y"));
-        assertContains(secondRequest, "encoded=x%2Fy", "decoded star replacement");
+        assertContains(firstRequest, "name=preA+Bpost", "raw marker replacement");
     }
 
     private static void testJsonInsertionPoints() {
@@ -640,7 +801,7 @@ public final class SmokeTest {
                 "Host: example.test",
                 "Content-Type: application/json");
         List<BodyInsertionPoint> points = BodyInsertionPoint.fromJson(
-                helpers, headers, "{\"name\":\"pre*post\",\"items\":[\"*\"]}");
+                helpers, headers, "{\"name\":\"pre§§post\",\"items\":[\"§§\"]}");
 
         assertEquals(2, points.size(), "json marker count");
         assertEquals("name", points.get(0).getName(), "json object key");
@@ -658,9 +819,9 @@ public final class SmokeTest {
                 "Content-Type: multipart/form-data; boundary=abc123");
         String body = ""
                 + "--abc123\r\n"
-                + "Content-Disposition: form-data; name=\"file\"; filename=\"*\"\r\n"
+                + "Content-Disposition: form-data; name=\"file\"; filename=\"§§\"\r\n"
                 + "\r\n"
-                + "pre*post\r\n"
+                + "pre§§post\r\n"
                 + "--abc123--\r\n";
 
         List<BodyInsertionPoint> points = BodyInsertionPoint.fromMultipart(helpers, headers, body);
@@ -674,8 +835,8 @@ public final class SmokeTest {
         String filenameRequest = helpers.bytesToString(points.get(0).buildRequest("upload.txt"));
         assertContains(filenameRequest, "filename=\"upload.txt\"", "multipart filename replacement");
 
-        String encodedFilenameBody = body.replace("filename=\"*\"",
-                "filename*=UTF-8''*");
+        String encodedFilenameBody = body.replace("filename=\"§§\"",
+                "filename*=UTF-8''§§");
         List<BodyInsertionPoint> encodedFilenamePoints = BodyInsertionPoint.fromMultipart(
                 helpers, headers, encodedFilenameBody);
         assertEquals("multipart:filename:file", encodedFilenamePoints.get(0).getName(),
@@ -712,7 +873,7 @@ public final class SmokeTest {
                 "POST /xml HTTP/1.1",
                 "Host: example.test",
                 "Content-Type: application/xml");
-        String body = "<root id=\"*\"><name>pre*post</name></root>";
+        String body = "<root id=\"§§\"><name>pre§§post</name></root>";
 
         List<BodyInsertionPoint> points = BodyInsertionPoint.fromXml(helpers, headers, body);
         assertEquals(2, points.size(), "xml marker count");
@@ -1586,8 +1747,9 @@ public final class SmokeTest {
                 assertEquals("接口", ((JTable) privateField(panel, "resultTable"))
                         .getColumnName(1), "localized result column");
                 JTabbedPane tabs = (JTabbedPane) privateField(panel, "mainTabs");
-                assertEquals("任务配置", tabs.getTitleAt(0), "localized runner tab");
-                assertEquals("运行结果", tabs.getTitleAt(1), "localized results tab");
+                assertEquals("请求标记", tabs.getTitleAt(0), "localized marker tab");
+                assertEquals("任务配置", tabs.getTitleAt(1), "localized runner tab");
+                assertEquals("运行结果", tabs.getTitleAt(2), "localized results tab");
             } catch (Exception ex) {
                 throw new RuntimeException(ex);
             }
@@ -2050,6 +2212,9 @@ public final class SmokeTest {
     }
 
     private static final class FakeMessageEditor implements IMessageEditor {
+        private byte[] message = new byte[0];
+        private int[] selectionBounds;
+
         @Override
         public Component getComponent() {
             return new JPanel();
@@ -2057,11 +2222,12 @@ public final class SmokeTest {
 
         @Override
         public void setMessage(byte[] message, boolean isRequest) {
+            this.message = message == null ? new byte[0] : message;
         }
 
         @Override
         public byte[] getMessage() {
-            return new byte[0];
+            return message;
         }
 
         @Override
@@ -2072,6 +2238,11 @@ public final class SmokeTest {
         @Override
         public byte[] getSelectedData() {
             return new byte[0];
+        }
+
+        @Override
+        public int[] getSelectionBounds() {
+            return selectionBounds;
         }
     }
 
@@ -2131,7 +2302,16 @@ public final class SmokeTest {
                     + "Host: example.test\r\n"
                     + "Content-Type: application/x-www-form-urlencoded\r\n"
                     + "\r\n"
-                    + "name=*";
+                    + "name=§§";
+            return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
+        }
+
+        static FakeMessage rawRequestWithoutMarker() {
+            String request = ""
+                    + "POST /submit?id=1 HTTP/1.1\r\n"
+                    + "Host: example.test\r\n"
+                    + "Accept: */*\r\n"
+                    + "\r\n";
             return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
         }
 
@@ -2141,7 +2321,7 @@ public final class SmokeTest {
 
         private static byte[] queryRequestBytes() {
             String request = ""
-                    + "POST /submit?id=* HTTP/1.1\r\n"
+                    + "POST /submit?id=§§ HTTP/1.1\r\n"
                     + "Host: example.test\r\n"
                     + "\r\n";
             return request.getBytes(StandardCharsets.ISO_8859_1);
@@ -2149,7 +2329,7 @@ public final class SmokeTest {
 
         static FakeMessage queryWithMarker() {
             String request = ""
-                    + "POST /submit?id=* HTTP/1.1\r\n"
+                    + "POST /submit?id=§§ HTTP/1.1\r\n"
                     + "Host: example.test\r\n"
                     + "\r\n";
             return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
@@ -2160,9 +2340,9 @@ public final class SmokeTest {
                     + "POST /upload HTTP/1.1\r\n"
                     + "Host: example.test\r\n"
                     + "Content-Type: application/octet-stream\r\n"
-                    + "Content-Length: 12\r\n"
+                    + "Content-Length: 14\r\n"
                     + "\r\n"
-                    + "binary*tail*";
+                    + "binary§§tail§§";
             return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
         }
 
@@ -2171,9 +2351,9 @@ public final class SmokeTest {
                     + "POST /json HTTP/1.1\r\n"
                     + "Host: example.test\r\n"
                     + "Content-Type: application/json\r\n"
-                    + "Content-Length: 8\r\n"
+                    + "Content-Length: 9\r\n"
                     + "\r\n"
-                    + "{\"id\":*}";
+                    + "{\"id\":§§}";
             return new FakeMessage(request.getBytes(StandardCharsets.ISO_8859_1));
         }
 

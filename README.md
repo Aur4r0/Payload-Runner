@@ -1,20 +1,25 @@
 # Payload Runner Burp Extension
 
 Payload Runner is a Java Burp Suite extension MVP. It adds a context menu action,
-`发送到 Payload Runner`, then runs categorized payloads against request body
-parameters whose values contain `*`.
+`发送到 Payload Runner`, then runs categorized payloads against request
+parameters whose values are marked with a paired `§…§` region.
 
 ## Features
 
 - Context menu: `发送到 Payload Runner`
-- URL query parameters whose values contain `*`, including POST request lines
+- URL query parameters marked with `§…§`, including POST request lines
 - Body formats:
   - `application/x-www-form-urlencoded`
   - JSON bodies
   - `multipart/form-data`
   - XML attribute values and text nodes
   - Multipart part content, `name`/`filename` parameters, and raw/unknown request bodies
-- Marks insertion points by finding URL/body values that contain `*`
+- Marks insertion points by finding URL/header/body values wrapped in `§…§`
+  (an empty pair `§§` marks a point; a wrapped value `§old§` replaces the whole
+  region). Because the marker is paired, values that merely contain `*` such as
+  `Accept: */*` are never mistaken for insertion points.
+- Select text in the built-in editable request editor and click `标记选中(§)`
+  to wrap it — no need to type `§` by hand or pre-mark the request in Repeater
 - YAML payload categories
 - Editable payload YAML with save/reset controls
 - Multi-select categories before running
@@ -79,7 +84,9 @@ so Burp's own API classes are used at runtime.
 sh scripts/test.sh
 ```
 
-The smoke test covers YAML parsing, marker replacement, rate presets, direct and
+The smoke test covers YAML parsing, paired-marker parsing/replacement, the
+`Accept: */*` no-false-marker regression, in-panel selection marking, marker
+clearing, raw-request queueing, unmarked-run blocking, rate presets, direct and
 Proxy transport configuration, local fake-Proxy HTTP routing, CONNECT request
 generation, per-request Proxy failure isolation, practical hit rules, elapsed-time
 rules, result-row coloring, official Proxy listener highlight correlation,
@@ -132,19 +139,36 @@ Sent to Repeater；上方提供过滤、手动发送到 Repeater、标记 intere
 
 ## 使用说明
 
-1. 在 Burp 的任意请求里，把要跑 payload 的参数值位置标成 `*`。
-   - URL 路径参数示例：`GET /api/users/id*/detail HTTP/1.1`
-   - URL 查询参数示例：`GET /search?q=* HTTP/1.1`
-   - POST URL 查询参数示例：`POST /api?keyword=* HTTP/1.1`
-   - Header 示例：`X-Forwarded-For: *` 或 `Cookie: session=*`
-   - form body 示例：`username=*&password=123`
-   - JSON 示例：`{"keyword":"*"}`
-   - multipart/XML 中的字段值同样支持 `*`
+标记方式有两种，都用成对的 `§…§` 界定注入位置（`§` = U+00A7）。一对 `§…§`
+框住的整段内容（含定界符）在发包时被 payload 整体替换；空的一对 `§§` 表示
+“在此插入”。因为标记是成对的，像 `Accept: */*` 这种本身带 `*` 的头不会再被
+误当成注入点。
+
+**方式 A（推荐，无需手输 `§`）**：把原始请求（不用预先标记）右键
+`发送到 Payload Runner`，插件会切到 `请求标记` 页；在左侧 `待执行请求` 里选中该请求，
+右侧 `请求报文` 编辑器会载入报文，选中要注入的值后点 `标记选中(§)`，插件自动把
+选区包成 `§…§`。可重复选中多处、标记多次，每对 `§…§` 是一个独立注入点。改完点
+`应用报文修改` 也可以捕获手动编辑。
+
+**方式 B（手动标记）**：在 Burp 里直接把要跑 payload 的位置写成 `§…§` 再发送。
+
+1. 用上面任一方式标记注入位置。手动标记示例：
+   - URL 路径参数示例：`GET /api/users/id§§/detail HTTP/1.1`
+   - URL 查询参数示例：`GET /search?q=§§ HTTP/1.1`
+   - POST URL 查询参数示例：`POST /api?keyword=§§ HTTP/1.1`
+   - Header 示例：`X-Forwarded-For: §§` 或 `Cookie: session=§§`
+   - form body 示例：`username=§§&password=123`
+   - JSON 示例：`{"keyword":"§§"}`
+   - 包裹已有值示例：`Accept: §*/*§`（整段 `*/*` 被替换，内部 `*` 是字面量）
+   - multipart/XML 中的字段值同样支持 `§…§`
 2. 在 Burp 请求列表、Repeater、Proxy history 等位置右键请求，选择
-   `发送到 Payload Runner`。
-3. 打开 `Payload Runner` 插件页，在 `任务配置` 页面确认：
-   - `待执行请求`：要测试的请求队列。选中某几条时只跑选中的请求；
-     不选中时跑整个队列。右键队列项可删除选中请求。
+   `发送到 Payload Runner`。未标记的请求也可以先加入队列，再用方式 A 标记。
+3. 插件页分为 `请求标记`、`任务配置`、`运行结果` 三个标签。
+   - `请求标记` 页：左侧 `待执行请求` 是请求队列，选中某几条时只跑选中的请求，
+     不选中时跑整个队列，右键队列项可删除；右侧 `请求报文` 编辑器随选中项载入，
+     用 `标记选中(§)` 标记注入点、`清除标记` 去掉当前报文的全部 `§`、
+     `应用报文修改` 同步手动编辑。
+4. 在 `任务配置` 页面确认：
    - `Payload 分类`：选择要运行的 payload 分类。`全选` 选择全部，`全不选`
      清空选择。
    - `编码方式`：选择 payload 写入请求时的编码策略：`URL 编码`、

@@ -55,13 +55,23 @@ final class QueryInsertionPoint implements PayloadInsertionPoint {
                 int valueStart = queryStart + 1 + cursor + equals + 1;
                 int valueEnd = queryStart + 1 + end;
                 String decodedValue = safeUrlDecode(helpers, rawValue);
-                if (PayloadMarker.contains(rawValue) || PayloadMarker.contains(decodedValue)) {
+                boolean rawHas = PayloadMarker.contains(rawValue);
+                boolean decodedHas = !rawHas && PayloadMarker.contains(decodedValue);
+                if (rawHas || decodedHas) {
                     String decodedName = safeUrlDecode(helpers, rawName);
-                    points.add(new QueryInsertionPoint(helpers, headers, body,
-                            "url:" + decodedName,
-                            (payload, encodingStrategy) -> replaceQueryValue(helpers, target,
-                                    valueStart, valueEnd, rawValue, decodedValue, payload,
-                                    encodingStrategy)));
+                    String baseName = "url:" + decodedName;
+                    int regionCount = rawHas
+                            ? PayloadMarker.countRegions(rawValue)
+                            : PayloadMarker.countRegions(decodedValue);
+                    for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                        final int activeRegion = regionIndex;
+                        final boolean useRaw = rawHas;
+                        points.add(new QueryInsertionPoint(helpers, headers, body,
+                                baseName + PayloadMarker.regionSuffix(regionIndex),
+                                (payload, encodingStrategy) -> replaceQueryValue(helpers, target,
+                                        valueStart, valueEnd, rawValue, decodedValue, payload,
+                                        encodingStrategy, activeRegion, useRaw)));
+                    }
                 }
             }
 
@@ -82,22 +92,29 @@ final class QueryInsertionPoint implements PayloadInsertionPoint {
     public byte[] buildRequest(String payload, EncodingStrategy encodingStrategy) {
         RequestLine requestLine = RequestLine.parse(headers.get(0));
         if (requestLine == null) {
-            return helpers.buildHttpMessage(new ArrayList<String>(headers), helpers.stringToBytes(body));
+            return helpers.buildHttpMessage(PayloadMarker.stripMarkersInHeaders(headers),
+                    helpers.stringToBytes(PayloadMarker.stripMarkers(body)));
         }
 
-        List<String> newHeaders = new ArrayList<String>(headers);
-        newHeaders.set(0, requestLine.withTarget(mutation.buildTarget(payload, encodingStrategy)));
-        return helpers.buildHttpMessage(newHeaders, helpers.stringToBytes(body));
+        // Active region is injected first; remaining § pairs elsewhere are stripped to original text.
+        // Payload itself should not contain § (same constraint as Burp Intruder markers).
+        List<String> newHeaders = PayloadMarker.stripMarkersInHeaders(headers);
+        String target = mutation.buildTarget(payload, encodingStrategy);
+        newHeaders.set(0, requestLine.withTarget(PayloadMarker.stripMarkers(target)));
+        return helpers.buildHttpMessage(newHeaders,
+                helpers.stringToBytes(PayloadMarker.stripMarkers(body)));
     }
 
     private static String replaceQueryValue(IExtensionHelpers helpers, String target,
             int valueStart, int valueEnd, String rawValue, String decodedValue, String payload,
-            EncodingStrategy encodingStrategy) {
+            EncodingStrategy encodingStrategy, int regionIndex, boolean useRaw) {
         String newRawValue;
-        if (PayloadMarker.contains(rawValue)) {
-            newRawValue = PayloadMarker.replaceRegions(rawValue, encodingStrategy.encode(helpers, payload));
+        if (useRaw) {
+            newRawValue = PayloadMarker.replaceRegionAt(rawValue, regionIndex,
+                    encodingStrategy.encode(helpers, payload));
         } else {
-            newRawValue = encodeWholeValue(helpers, PayloadMarker.replaceRegions(decodedValue, payload),
+            newRawValue = encodeWholeValue(helpers,
+                    PayloadMarker.replaceRegionAt(decodedValue, regionIndex, payload),
                     encodingStrategy);
         }
         return target.substring(0, valueStart) + newRawValue + target.substring(valueEnd);

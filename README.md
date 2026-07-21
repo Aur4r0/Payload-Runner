@@ -16,8 +16,11 @@ parameters whose values are marked with a paired `§…§` region.
   - Multipart part content, `name`/`filename` parameters, and raw/unknown request bodies
 - Marks insertion points by finding URL/header/body values wrapped in `§…§`
   (an empty pair `§§` marks a point; a wrapped value `§old§` replaces the whole
-  region). Because the marker is paired, values that merely contain `*` such as
-  `Accept: */*` are never mistaken for insertion points.
+  region). Each pair is an independent Intruder-style **sniper** point: only that
+  pair is replaced by the payload, all other pairs are stripped to their original
+  inner text, and sent requests never retain `§`. Because the marker is paired,
+  values that merely contain `*` such as `Accept: */*` are never mistaken for
+  insertion points.
 - Select text in the built-in editable request editor and click `标记选中(§)`
   to wrap it — no need to type `§` by hand or pre-mark the request in Repeater
 - YAML payload categories
@@ -141,8 +144,10 @@ Sent to Repeater；上方提供过滤、手动发送到 Repeater、标记 intere
 
 标记方式有两种，都用成对的 `§…§` 界定注入位置（`§` = U+00A7）。一对 `§…§`
 框住的整段内容（含定界符）在发包时被 payload 整体替换；空的一对 `§§` 表示
-“在此插入”。因为标记是成对的，像 `Accept: */*` 这种本身带 `*` 的头不会再被
-误当成注入点。
+“在此插入”。多处标记按 **sniper** 语义：每次只替换当前这一对，其余位置去掉
+`§` 并保留中间原文，发出的请求里不应再出现 `§`。同一字段内多对 `§…§` 也会拆成
+多个注入点（名称带 `@2`、`@3`… 后缀）。因为标记是成对的，像 `Accept: */*`
+这种本身带 `*` 的头不会再被误当成注入点。
 
 **方式 A（推荐，无需手输 `§`）**：把原始请求（不用预先标记）右键
 `发送到 Payload Runner`，插件会切到 `请求标记` 页；在左侧 `待执行请求` 里选中该请求，

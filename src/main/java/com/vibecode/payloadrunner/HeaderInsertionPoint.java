@@ -15,9 +15,10 @@ final class HeaderInsertionPoint implements PayloadInsertionPoint {
     private final int headerIndex;
     private final String headerName;
     private final String headerValue;
+    private final int regionIndex;
 
     private HeaderInsertionPoint(IExtensionHelpers helpers, List<String> headers, String body,
-            String name, int headerIndex, String headerName, String headerValue) {
+            String name, int headerIndex, String headerName, String headerValue, int regionIndex) {
         this.helpers = helpers;
         this.headers = new ArrayList<String>(headers);
         this.body = body;
@@ -25,6 +26,7 @@ final class HeaderInsertionPoint implements PayloadInsertionPoint {
         this.headerIndex = headerIndex;
         this.headerName = headerName;
         this.headerValue = headerValue;
+        this.regionIndex = regionIndex;
     }
 
     static List<HeaderInsertionPoint> fromHeaders(IExtensionHelpers helpers,
@@ -46,10 +48,14 @@ final class HeaderInsertionPoint implements PayloadInsertionPoint {
             Integer previous = occurrences.get(occurrenceKey);
             int occurrence = previous == null ? 1 : previous.intValue() + 1;
             occurrences.put(occurrenceKey, Integer.valueOf(occurrence));
-            String pointName = "header:" + headerName
+            String pointBase = "header:" + headerName
                     + (occurrence == 1 ? "" : "#" + occurrence);
-            points.add(new HeaderInsertionPoint(helpers, headers, body,
-                    pointName, index, headerName, headerValue));
+            int regionCount = PayloadMarker.countRegions(headerValue);
+            for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                points.add(new HeaderInsertionPoint(helpers, headers, body,
+                        pointBase + PayloadMarker.regionSuffix(regionIndex),
+                        index, headerName, headerValue, regionIndex));
+            }
         }
         return points;
     }
@@ -61,9 +67,13 @@ final class HeaderInsertionPoint implements PayloadInsertionPoint {
 
     @Override
     public byte[] buildRequest(String payload, EncodingStrategy encodingStrategy) {
-        List<String> newHeaders = new ArrayList<String>(headers);
-        String replacement = PayloadMarker.replaceRegions(headerValue, encodingStrategy.encode(helpers, payload));
-        newHeaders.set(headerIndex, headerName + ":" + replacement);
-        return helpers.buildHttpMessage(newHeaders, helpers.stringToBytes(body));
+        List<String> newHeaders = PayloadMarker.stripMarkersInHeaders(headers);
+        String replacement = PayloadMarker.replaceRegionAt(headerValue, regionIndex,
+                encodingStrategy.encode(helpers, payload));
+        // stripMarkersInHeaders already cleaned this header; rewrite with sniper active region.
+        // Remaining inactive pairs inside this value were already reduced by replaceRegionAt.
+        newHeaders.set(headerIndex, headerName + ":" + PayloadMarker.stripMarkers(replacement));
+        return helpers.buildHttpMessage(newHeaders,
+                helpers.stringToBytes(PayloadMarker.stripMarkers(body)));
     }
 }

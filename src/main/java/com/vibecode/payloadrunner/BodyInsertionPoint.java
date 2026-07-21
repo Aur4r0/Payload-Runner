@@ -41,12 +41,22 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 int valueStart = cursor + equals + 1;
                 int valueEnd = end;
                 String decodedValue = safeUrlDecode(helpers, rawValue);
-                if (PayloadMarker.contains(rawValue) || PayloadMarker.contains(decodedValue)) {
+                boolean rawHas = PayloadMarker.contains(rawValue);
+                boolean decodedHas = !rawHas && PayloadMarker.contains(decodedValue);
+                if (rawHas || decodedHas) {
                     String decodedName = safeUrlDecode(helpers, rawName);
-                    points.add(new BodyInsertionPoint(helpers, headers, decodedName,
-                            (payload, encodingStrategy) -> replaceFormValue(helpers, body,
-                                    valueStart, valueEnd, rawValue, decodedValue, payload,
-                                    encodingStrategy)));
+                    int regionCount = rawHas
+                            ? PayloadMarker.countRegions(rawValue)
+                            : PayloadMarker.countRegions(decodedValue);
+                    for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                        final int activeRegion = regionIndex;
+                        final boolean useRaw = rawHas;
+                        points.add(new BodyInsertionPoint(helpers, headers,
+                                decodedName + PayloadMarker.regionSuffix(regionIndex),
+                                (payload, encodingStrategy) -> replaceFormValue(helpers, body,
+                                        valueStart, valueEnd, rawValue, decodedValue, payload,
+                                        encodingStrategy, activeRegion, useRaw)));
+                    }
                 }
             }
             if (end == body.length()) {
@@ -68,12 +78,17 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 continue;
             }
             if (PayloadMarker.contains(token.getValue())) {
-                String name = lastKey == null || lastKey.isEmpty()
+                String baseName = lastKey == null || lastKey.isEmpty()
                         ? "json@" + token.getStart()
                         : lastKey;
-                points.add(new BodyInsertionPoint(helpers, headers, name,
-                        (payload, encodingStrategy) -> replaceJsonString(helpers, body, token,
-                                payload, encodingStrategy)));
+                int regionCount = PayloadMarker.countRegions(token.getValue());
+                for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                    final int activeRegion = regionIndex;
+                    points.add(new BodyInsertionPoint(helpers, headers,
+                            baseName + PayloadMarker.regionSuffix(regionIndex),
+                            (payload, encodingStrategy) -> replaceJsonString(helpers, body, token,
+                                    payload, encodingStrategy, activeRegion)));
+                }
             }
         }
         return points;
@@ -113,9 +128,14 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                     if (PayloadMarker.contains(content)) {
                         final int start = contentStart;
                         final int end = contentEnd;
-                        points.add(new BodyInsertionPoint(helpers, headers, "multipart:" + name,
-                                (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
-                                        start, end, payload, encodingStrategy)));
+                        int regionCount = PayloadMarker.countRegions(content);
+                        for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                            final int activeRegion = regionIndex;
+                            points.add(new BodyInsertionPoint(helpers, headers,
+                                    "multipart:" + name + PayloadMarker.regionSuffix(regionIndex),
+                                    (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
+                                            start, end, payload, encodingStrategy, activeRegion)));
+                        }
                     }
                 }
             }
@@ -128,9 +148,14 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
             String body) {
         List<BodyInsertionPoint> points = new ArrayList<BodyInsertionPoint>();
         if (body != null && PayloadMarker.contains(body)) {
-            points.add(new BodyInsertionPoint(helpers, headers, "body:raw",
-                    (payload, encodingStrategy) -> PayloadMarker.replaceRegions(body,
-                            encodingStrategy.encode(helpers, payload))));
+            int regionCount = PayloadMarker.countRegions(body);
+            for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                final int activeRegion = regionIndex;
+                points.add(new BodyInsertionPoint(helpers, headers,
+                        "body:raw" + PayloadMarker.regionSuffix(regionIndex),
+                        (payload, encodingStrategy) -> PayloadMarker.replaceRegionAt(body,
+                                activeRegion, encodingStrategy.encode(helpers, payload))));
+            }
         }
         return points;
     }
@@ -150,33 +175,40 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
 
     @Override
     public byte[] buildRequest(String payload, EncodingStrategy encodingStrategy) {
-        String newBody = bodyMutation.buildBody(payload, encodingStrategy);
-        return helpers.buildHttpMessage(new ArrayList<String>(headers), helpers.stringToBytes(newBody));
+        // Inject active region first, then strip remaining marker pairs across the whole body
+        // and all headers (other insertion sites keep original text without §).
+        String newBody = PayloadMarker.stripMarkers(bodyMutation.buildBody(payload, encodingStrategy));
+        return helpers.buildHttpMessage(PayloadMarker.stripMarkersInHeaders(headers),
+                helpers.stringToBytes(newBody));
     }
 
     private static String replaceFormValue(IExtensionHelpers helpers, String body, int valueStart,
             int valueEnd, String rawValue, String decodedValue, String payload,
-            EncodingStrategy encodingStrategy) {
+            EncodingStrategy encodingStrategy, int regionIndex, boolean useRaw) {
         String newRawValue;
-        if (PayloadMarker.contains(rawValue)) {
-            newRawValue = PayloadMarker.replaceRegions(rawValue, encodingStrategy.encode(helpers, payload));
+        if (useRaw) {
+            newRawValue = PayloadMarker.replaceRegionAt(rawValue, regionIndex,
+                    encodingStrategy.encode(helpers, payload));
         } else {
-            newRawValue = encodeWholeValue(helpers, PayloadMarker.replaceRegions(decodedValue, payload),
+            newRawValue = encodeWholeValue(helpers,
+                    PayloadMarker.replaceRegionAt(decodedValue, regionIndex, payload),
                     encodingStrategy);
         }
         return body.substring(0, valueStart) + newRawValue + body.substring(valueEnd);
     }
 
     private static String replaceJsonString(IExtensionHelpers helpers, String body,
-            JsonStringToken token, String payload, EncodingStrategy encodingStrategy) {
-        String newValue = PayloadMarker.replaceRegions(token.getValue(), payload);
+            JsonStringToken token, String payload, EncodingStrategy encodingStrategy,
+            int regionIndex) {
+        String newValue = PayloadMarker.replaceRegionAt(token.getValue(), regionIndex, payload);
         if (encodingStrategy == EncodingStrategy.RAW) {
             return body.substring(0, token.getStart() + 1)
                     + newValue
                     + body.substring(token.getEnd() - 1);
         }
         if (encodingStrategy == EncodingStrategy.URL_ENCODE) {
-            newValue = PayloadMarker.replaceRegions(token.getValue(), encodingStrategy.encode(helpers, payload));
+            newValue = PayloadMarker.replaceRegionAt(token.getValue(), regionIndex,
+                    encodingStrategy.encode(helpers, payload));
         }
         return body.substring(0, token.getStart())
                 + JsonStrings.quote(newValue)
@@ -195,10 +227,11 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
     }
 
     private static String replaceBodySegment(IExtensionHelpers helpers, String body, int start,
-            int end, String payload, EncodingStrategy encodingStrategy) {
+            int end, String payload, EncodingStrategy encodingStrategy, int regionIndex) {
         String value = body.substring(start, end);
         return body.substring(0, start)
-                + PayloadMarker.replaceRegions(value, encodingStrategy.encode(helpers, payload))
+                + PayloadMarker.replaceRegionAt(value, regionIndex,
+                        encodingStrategy.encode(helpers, payload))
                 + body.substring(end);
     }
 
@@ -242,10 +275,15 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                         String attrName = body.substring(nameStart, nameEnd).trim();
                         final int start = quoteStart + 1;
                         final int end = quoteEnd;
-                        points.add(new BodyInsertionPoint(helpers, headers,
-                                "xml:" + elementName + "@" + attrName,
-                                (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
-                                        start, end, payload, encodingStrategy)));
+                        int regionCount = PayloadMarker.countRegions(value);
+                        for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                            final int activeRegion = regionIndex;
+                            points.add(new BodyInsertionPoint(helpers, headers,
+                                    "xml:" + elementName + "@" + attrName
+                                            + PayloadMarker.regionSuffix(regionIndex),
+                                    (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
+                                            start, end, payload, encodingStrategy, activeRegion)));
+                        }
                     }
                     cursor = quoteEnd + 1;
                 }
@@ -268,9 +306,14 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                 String name = xmlTextElementName(body, textStart);
                 final int start = textStart;
                 final int end = textEnd;
-                points.add(new BodyInsertionPoint(helpers, headers, "xml:" + name,
-                        (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
-                                start, end, payload, encodingStrategy)));
+                int regionCount = PayloadMarker.countRegions(text);
+                for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                    final int activeRegion = regionIndex;
+                    points.add(new BodyInsertionPoint(helpers, headers,
+                            "xml:" + name + PayloadMarker.regionSuffix(regionIndex),
+                            (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
+                                    start, end, payload, encodingStrategy, activeRegion)));
+                }
             }
             textStart = body.indexOf('>', textEnd + 1);
         }
@@ -384,12 +427,20 @@ final class BodyInsertionPoint implements PayloadInsertionPoint {
                         String parameter = matcher.group(1).toLowerCase(Locale.ROOT);
                         int start = partStart + lineStart + colon + 1 + matcher.start(group);
                         int end = partStart + lineStart + colon + 1 + matcher.end(group);
-                        String pointName = parameter.startsWith("filename")
+                        String pointBase = parameter.startsWith("filename")
                                 ? "multipart:filename:" + safeMultipartFieldName(fieldName)
                                 : "multipart:name";
-                        points.add(new BodyInsertionPoint(helpers, headers, pointName,
-                                (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
-                                        start, end, payload, encodingStrategy)));
+                        int regionCount = PayloadMarker.countRegions(parameterValue);
+                        for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                            final int activeRegion = regionIndex;
+                            final int regionStart = start;
+                            final int regionEnd = end;
+                            points.add(new BodyInsertionPoint(helpers, headers,
+                                    pointBase + PayloadMarker.regionSuffix(regionIndex),
+                                    (payload, encodingStrategy) -> replaceBodySegment(helpers, body,
+                                            regionStart, regionEnd, payload, encodingStrategy,
+                                            activeRegion)));
+                        }
                     }
                 }
             }

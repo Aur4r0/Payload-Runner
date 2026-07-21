@@ -55,16 +55,26 @@ final class PathInsertionPoint implements PayloadInsertionPoint {
             if (!rawSegment.isEmpty()) {
                 segmentIndex++;
                 String decodedSegment = safeUrlDecode(helpers, rawSegment);
-                if (PayloadMarker.contains(rawSegment) || PayloadMarker.contains(decodedSegment)) {
+                boolean rawHas = PayloadMarker.contains(rawSegment);
+                boolean decodedHas = !rawHas && PayloadMarker.contains(decodedSegment);
+                if (rawHas || decodedHas) {
                     final int valueStart = pathStart + cursor;
                     final int valueEnd = pathStart + end;
                     final String originalRaw = rawSegment;
                     final String originalDecoded = decodedSegment;
-                    points.add(new PathInsertionPoint(helpers, headers, body,
-                            "url:path[" + segmentIndex + "]",
-                            (payload, encodingStrategy) -> replacePathSegment(helpers, target,
-                                    valueStart, valueEnd, originalRaw, originalDecoded, payload,
-                                    encodingStrategy)));
+                    String baseName = "url:path[" + segmentIndex + "]";
+                    int regionCount = rawHas
+                            ? PayloadMarker.countRegions(rawSegment)
+                            : PayloadMarker.countRegions(decodedSegment);
+                    for (int regionIndex = 0; regionIndex < regionCount; regionIndex++) {
+                        final int activeRegion = regionIndex;
+                        final boolean useRaw = rawHas;
+                        points.add(new PathInsertionPoint(helpers, headers, body,
+                                baseName + PayloadMarker.regionSuffix(regionIndex),
+                                (payload, encodingStrategy) -> replacePathSegment(helpers, target,
+                                        valueStart, valueEnd, originalRaw, originalDecoded, payload,
+                                        encodingStrategy, activeRegion, useRaw)));
+                    }
                 }
             }
             if (end == path.length()) {
@@ -84,22 +94,26 @@ final class PathInsertionPoint implements PayloadInsertionPoint {
     public byte[] buildRequest(String payload, EncodingStrategy encodingStrategy) {
         RequestLine requestLine = RequestLine.parse(headers.get(0));
         if (requestLine == null) {
-            return helpers.buildHttpMessage(new ArrayList<String>(headers),
-                    helpers.stringToBytes(body));
+            return helpers.buildHttpMessage(PayloadMarker.stripMarkersInHeaders(headers),
+                    helpers.stringToBytes(PayloadMarker.stripMarkers(body)));
         }
-        List<String> newHeaders = new ArrayList<String>(headers);
-        newHeaders.set(0, requestLine.withTarget(mutation.buildTarget(payload, encodingStrategy)));
-        return helpers.buildHttpMessage(newHeaders, helpers.stringToBytes(body));
+        List<String> newHeaders = PayloadMarker.stripMarkersInHeaders(headers);
+        String target = mutation.buildTarget(payload, encodingStrategy);
+        newHeaders.set(0, requestLine.withTarget(PayloadMarker.stripMarkers(target)));
+        return helpers.buildHttpMessage(newHeaders,
+                helpers.stringToBytes(PayloadMarker.stripMarkers(body)));
     }
 
     private static String replacePathSegment(IExtensionHelpers helpers, String target,
             int valueStart, int valueEnd, String rawSegment, String decodedSegment,
-            String payload, EncodingStrategy encodingStrategy) {
+            String payload, EncodingStrategy encodingStrategy, int regionIndex, boolean useRaw) {
         String replacement;
-        if (PayloadMarker.contains(rawSegment)) {
-            replacement = PayloadMarker.replaceRegions(rawSegment, encodingStrategy.encode(helpers, payload));
+        if (useRaw) {
+            replacement = PayloadMarker.replaceRegionAt(rawSegment, regionIndex,
+                    encodingStrategy.encode(helpers, payload));
         } else {
-            replacement = encodeWholeValue(helpers, PayloadMarker.replaceRegions(decodedSegment, payload),
+            replacement = encodeWholeValue(helpers,
+                    PayloadMarker.replaceRegionAt(decodedSegment, regionIndex, payload),
                     encodingStrategy);
         }
         return target.substring(0, valueStart) + replacement + target.substring(valueEnd);

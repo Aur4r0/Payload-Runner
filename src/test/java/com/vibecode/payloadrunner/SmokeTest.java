@@ -146,6 +146,10 @@ public final class SmokeTest {
         assertEquals(false, PayloadMarker.contains(""), "empty string has no region");
         assertEquals(false, PayloadMarker.contains(null), "null has no region");
 
+        assertEquals(0, PayloadMarker.countRegions("a§b"), "lone delimiter count");
+        assertEquals(1, PayloadMarker.countRegions("pre§x§post"), "single region count");
+        assertEquals(2, PayloadMarker.countRegions("a§1§b§2§c"), "two region count");
+
         assertEquals("preXpost", PayloadMarker.replaceRegions("pre§§post", "X"),
                 "empty pair replaced");
         assertEquals("preXpost", PayloadMarker.replaceRegions("pre§abc§post", "X"),
@@ -156,6 +160,15 @@ public final class SmokeTest {
                 "lone delimiter preserved");
         assertEquals("*/*", PayloadMarker.replaceRegions("*/*", "X"),
                 "star content untouched");
+
+        assertEquals("aXb2c", PayloadMarker.replaceRegionAt("a§1§b§2§c", 0, "X"),
+                "sniper first region");
+        assertEquals("a1bXc", PayloadMarker.replaceRegionAt("a§1§b§2§c", 1, "X"),
+                "sniper second region keeps first original");
+        assertEquals("a1b2c", PayloadMarker.replaceRegionAt("a§1§b§2§c", 9, "X"),
+                "sniper out-of-range strips all pairs");
+        assertEquals("preXpost", PayloadMarker.replaceRegionAt("pre§§post", 0, "X"),
+                "sniper empty pair");
 
         assertEquals("prepost", PayloadMarker.stripMarkers("pre§§post"),
                 "empty pair markers stripped");
@@ -303,6 +316,39 @@ public final class SmokeTest {
         String firstRequest = helpers.bytesToString(points.get(0).buildRequest("A B"));
         assertContains(firstRequest, "POST /submit?name=preA+Bpost&encoded=%2A HTTP/1.1",
                 "raw query replacement");
+        assertEquals(false, firstRequest.contains("§"), "query request has no leftover markers");
+
+        List<String> multiHeaders = Arrays.asList(
+                "GET /x?a=§foo§&b=§bar§ HTTP/1.1",
+                "Host: example.test",
+                "X-Extra: §keep§");
+        List<QueryInsertionPoint> multi = QueryInsertionPoint.fromRequestLine(
+                helpers, multiHeaders, "body=§z§");
+        assertEquals(2, multi.size(), "one point per query region");
+        assertEquals("url:a", multi.get(0).getName(), "first query param");
+        assertEquals("url:b", multi.get(1).getName(), "second query param");
+
+        String hitA = helpers.bytesToString(multi.get(0).buildRequest("PAY", EncodingStrategy.RAW));
+        assertContains(hitA, "GET /x?a=PAY&b=bar HTTP/1.1", "sniper hits a, b keeps original");
+        assertContains(hitA, "X-Extra: keep", "inactive header marker stripped to original");
+        assertContains(hitA, "body=z", "inactive body marker stripped to original");
+        assertEquals(false, hitA.contains("§"), "sniper request has no leftover markers");
+
+        String hitB = helpers.bytesToString(multi.get(1).buildRequest("PAY", EncodingStrategy.RAW));
+        assertContains(hitB, "GET /x?a=foo&b=PAY HTTP/1.1", "sniper hits b, a keeps original");
+
+        List<String> multiRegionHeaders = Arrays.asList(
+                "GET /x?v=pre§one§mid§two§post HTTP/1.1",
+                "Host: example.test");
+        List<QueryInsertionPoint> multiRegion = QueryInsertionPoint.fromRequestLine(
+                helpers, multiRegionHeaders, "");
+        assertEquals(2, multiRegion.size(), "same value yields one point per region");
+        assertEquals("url:v", multiRegion.get(0).getName(), "first region name");
+        assertEquals("url:v@2", multiRegion.get(1).getName(), "second region name");
+        String r1 = helpers.bytesToString(multiRegion.get(0).buildRequest("X", EncodingStrategy.RAW));
+        assertContains(r1, "v=preXmidtwopost", "first region only");
+        String r2 = helpers.bytesToString(multiRegion.get(1).buildRequest("X", EncodingStrategy.RAW));
+        assertContains(r2, "v=preonemidXpost", "second region only");
     }
 
     private static void testPathInsertionPoints() {
@@ -315,8 +361,9 @@ public final class SmokeTest {
         assertEquals("url:path[3]", points.get(0).getName(), "path marker name");
         String request = helpers.bytesToString(points.get(0)
                 .buildRequest("A/B", EncodingStrategy.URL_ENCODE));
-        assertContains(request, "GET /api/users/parameterA%2FB/detail?id=§§ HTTP/1.1",
-                "path marker replacement keeps query");
+        assertContains(request, "GET /api/users/parameterA%2FB/detail?id= HTTP/1.1",
+                "path marker replacement strips inactive query markers");
+        assertEquals(false, request.contains("§"), "path sniper request has no leftover markers");
 
         List<String> absoluteHeaders = Arrays.asList(
                 "GET http://example.test/root/%2A/end?next=§§ HTTP/1.1",
@@ -343,13 +390,15 @@ public final class SmokeTest {
         String firstRequest = helpers.bytesToString(points.get(0)
                 .buildRequest("payload", EncodingStrategy.RAW));
         assertContains(firstRequest, "X-Test: prepayloadpost", "header marker replacement");
-        assertContains(firstRequest, "Cookie: session=§§", "other header marker preserved");
+        assertContains(firstRequest, "Cookie: session=", "other header marker stripped to original");
+        assertEquals(false, firstRequest.contains("§"), "header sniper has no leftover markers");
         assertContains(firstRequest, "Accept: */*", "accept header left untouched");
 
         String secondRequest = helpers.bytesToString(points.get(1)
                 .buildRequest("a/b", EncodingStrategy.URL_ENCODE));
         assertContains(secondRequest, "Cookie: session=a%2Fb",
                 "header marker encoding strategy");
+        assertContains(secondRequest, "X-Test: prepost", "inactive header keeps original text");
 
         List<String> wrappedHeaders = Arrays.asList(
                 "POST /submit HTTP/1.1",
@@ -809,6 +858,8 @@ public final class SmokeTest {
 
         String request = helpers.bytesToString(points.get(0).buildRequest("PAY"));
         assertContains(request, "\"name\":\"prePAYpost\"", "json replacement");
+        assertContains(request, "\"items\":[\"\"]", "inactive json marker stripped to original");
+        assertEquals(false, request.contains("§"), "json sniper has no leftover markers");
     }
 
     private static void testMultipartInsertionPoints() {
@@ -832,8 +883,11 @@ public final class SmokeTest {
 
         String request = helpers.bytesToString(points.get(1).buildRequest("A B"));
         assertContains(request, "preA+Bpost", "multipart replacement");
+        assertContains(request, "filename=\"\"", "inactive multipart filename stripped");
+        assertEquals(false, request.contains("§"), "multipart sniper has no leftover markers");
         String filenameRequest = helpers.bytesToString(points.get(0).buildRequest("upload.txt"));
         assertContains(filenameRequest, "filename=\"upload.txt\"", "multipart filename replacement");
+        assertContains(filenameRequest, "prepost", "inactive multipart body stripped to original");
 
         String encodedFilenameBody = body.replace("filename=\"§§\"",
                 "filename*=UTF-8''§§");
@@ -851,12 +905,19 @@ public final class SmokeTest {
         FakeHelpers helpers = new FakeHelpers();
         RequestTemplate template = RequestTemplate.fromMessage(helpers,
                 FakeMessage.rawBodyWithMarker());
-        assertEquals(1, template.getInsertionPoints().size(), "raw body marker count");
+        // raw body "binary§§tail§§" now yields one insertion point per region (sniper).
+        assertEquals(2, template.getInsertionPoints().size(), "raw body marker count");
         assertEquals("body:raw", template.getInsertionPoints().get(0).getName(),
                 "raw body marker name");
+        assertEquals("body:raw@2", template.getInsertionPoints().get(1).getName(),
+                "raw body second region name");
         String request = helpers.bytesToString(template.getInsertionPoints().get(0)
                 .buildRequest("PAY", EncodingStrategy.RAW));
-        assertContains(request, "binaryPAYtailPAY", "raw body replacement");
+        assertContains(request, "binaryPAYtail", "raw body first region only");
+        assertEquals(false, request.contains("§"), "raw body sniper has no leftover markers");
+        String second = helpers.bytesToString(template.getInsertionPoints().get(1)
+                .buildRequest("PAY", EncodingStrategy.RAW));
+        assertContains(second, "binarytailPAY", "raw body second region only");
 
         RequestTemplate jsonScalar = RequestTemplate.fromMessage(helpers,
                 FakeMessage.jsonScalarWithMarker());
@@ -882,8 +943,12 @@ public final class SmokeTest {
 
         String attributeRequest = helpers.bytesToString(points.get(0).buildRequest("A B"));
         assertContains(attributeRequest, "id=\"A+B\"", "xml attribute replacement");
+        assertContains(attributeRequest, "<name>prepost</name>",
+                "inactive xml text marker stripped to original");
+        assertEquals(false, attributeRequest.contains("§"), "xml sniper has no leftover markers");
         String textRequest = helpers.bytesToString(points.get(1).buildRequest("A B"));
         assertContains(textRequest, "<name>preA+Bpost</name>", "xml text replacement");
+        assertContains(textRequest, "id=\"\"", "inactive xml attribute stripped to original");
     }
 
     private static void testResponseDiffAndHitRules() {

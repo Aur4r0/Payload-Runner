@@ -1,5 +1,9 @@
 # Payload Runner Burp Extension
 
+当前版本：**v1.1.0** · [下载插件](https://github.com/Aur4r0/Payload-Runner/releases/tag/v1.1.0) · [更新记录](CHANGELOG.md) · [本次发布说明](docs/releases/v1.1.0.md)
+
+本次重点：在同一个编辑器中完成 JSON/XML 格式化显示、编辑和 `§` 标记；修复选区漂移、清除标记误删报文和 UTF-8 兼容问题。
+
 Payload Runner is a Java Burp Suite extension MVP. It adds a context menu action,
 `发送到 Payload Runner`, then runs categorized payloads against request
 parameters whose values are marked with a paired `§…§` region.
@@ -346,3 +350,19 @@ diff are calculated before truncation.
 GitHub Actions runs `sh scripts/test.sh` and `sh scripts/build.sh` on pushes and
 pull requests. Tags starting with `v` also build the jar and publish or replace
 the Release asset.
+
+### 单一编辑器：格式化显示与 § 标记
+
+请求标记区域只有一个编辑框，不再区分原生页和标记页。默认开启“格式化显示”，JSON 和结构型 XML 会显示缩进；取消勾选后原样显示。两种显示方式都能直接编辑、选择并添加 `§内容§` 高亮。
+
+格式化仅改变显示，不改原始报文字节。每个实际字符都保留到原文位置的映射，额外显示的缩进和换行不作为报文数据。选择格式化后的值、数组或子树，标记和编辑会映射回原始内容；只选择虚拟缩进时拒绝标记和删除。清除标记不会把格式化空格写回原文，也不会删除选中的报文。
+
+字体跟“请求标记”页签一致，正文使用普通字重。语法配色适配浅色、深色主题；该编辑器不是 Burp 原生消息编辑器，不能保证与其私有语法配色逐项一致。结果报文仍使用 Burp 原生编辑器。
+
+不完整的 JSON/XML、XML 混合文本内容、`xml:space="preserve"`、DTD、超出大小/深度限制的内容以及不支持的格式，保留原样显示。XML 格式化禁止 DTD、外部实体和外部资源访问。当前不提供 HTML/CSS/JS 专用格式化。格式化预算为请求最多 512 KiB、显示最多 2 Mi 字符，并限制嵌套深度。
+
+Ctrl/Cmd+B 添加标记，Ctrl/Cmd+Shift+B 清除全部标记，Ctrl/Cmd+Z 撤销，Ctrl/Cmd+Shift+Z 重做，Ctrl/Cmd+Enter 应用报文。支持空插入点，拒绝重叠标记；右键可执行相同操作。格式化开关不产生报文编辑或撤销步骤。手动编辑或撤销后，点击“应用报文修改”再执行测试。
+
+粘贴采用纯文本处理，保留用户实际粘贴内容中的 CRLF 等换行，不导入富文本字体。选区、高亮及清除不读取 JTextPane 的换行序列化结果。UTF-8 正文正常显示，其他原始字节可往返保留，但可能不可读。旧版单字节 § 和临时 `~PR~` 标记仍可解析和清除。
+
+标记专项测试：`sh scripts/test.sh --markers-only`。包含 64 组格式化映射、48 组换行/选区完整性测试、JSON/XML 编辑和粘贴、重复值、虚拟缩进保护、格式化开关与撤销、大小/深度回退、UTF-8，以及不同字号的高亮绘制检查。实际 Burp 内的最终交互和主题效果仍需加载验证。

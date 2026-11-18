@@ -13,6 +13,28 @@ import java.util.List;
  */
 final class PayloadMarker {
     static final String MARKER = "§";
+    static final String ASCII_MARKER = "~PR~";
+
+    private static final String UTF8_BYTE_MARKER = "\u00c2\u00a7";
+
+    // Preserve byte offsets and UTF-8 sequences; only translate the temporary ASCII delimiter.
+    static String normalizeByteMarkers(String value) {
+        return value == null ? null : value.replace(ASCII_MARKER, UTF8_BYTE_MARKER);
+    }
+
+    static boolean hasDelimiter(String value) { return value != null && nextMarker(value, 0) >= 0; }
+
+    private static int delimiterLength(String value, int offset) {
+        return value.startsWith(UTF8_BYTE_MARKER, offset) ? 2 : 1;
+    }
+
+    private static int nextMarker(String value, int start) {
+        for (int i = start; i < value.length();) {
+            if (value.charAt(i) == '§' || value.startsWith(UTF8_BYTE_MARKER, i)) { return i; }
+            i += Utf8Sequence.length(value, i);
+        }
+        return -1;
+    }
 
     private PayloadMarker() {
     }
@@ -27,20 +49,19 @@ final class PayloadMarker {
         if (value == null || value.isEmpty()) {
             return 0;
         }
-        int markerLength = MARKER.length();
         int count = 0;
         int cursor = 0;
         while (cursor < value.length()) {
-            int open = value.indexOf(MARKER, cursor);
+            int open = nextMarker(value, cursor);
             if (open < 0) {
                 break;
             }
-            int close = value.indexOf(MARKER, open + markerLength);
+            int close = nextMarker(value, open + delimiterLength(value, open));
             if (close < 0) {
                 break;
             }
             count++;
-            cursor = close + markerLength;
+            cursor = close + delimiterLength(value, close);
         }
         return count;
     }
@@ -50,23 +71,22 @@ final class PayloadMarker {
         if (value == null || value.isEmpty()) {
             return value;
         }
-        int markerLength = MARKER.length();
         StringBuilder result = new StringBuilder(value.length());
         int cursor = 0;
         while (cursor < value.length()) {
-            int open = value.indexOf(MARKER, cursor);
+            int open = nextMarker(value, cursor);
             if (open < 0) {
                 result.append(value, cursor, value.length());
                 break;
             }
-            int close = value.indexOf(MARKER, open + markerLength);
+            int close = nextMarker(value, open + delimiterLength(value, open));
             if (close < 0) {
                 result.append(value, cursor, value.length());
                 break;
             }
             result.append(value, cursor, open);
             result.append(replacement == null ? "" : replacement);
-            cursor = close + markerLength;
+            cursor = close + delimiterLength(value, close);
         }
         return result.toString();
     }
@@ -81,17 +101,16 @@ final class PayloadMarker {
         if (value == null || value.isEmpty()) {
             return value;
         }
-        int markerLength = MARKER.length();
         StringBuilder result = new StringBuilder(value.length());
         int cursor = 0;
         int index = 0;
         while (cursor < value.length()) {
-            int open = value.indexOf(MARKER, cursor);
+            int open = nextMarker(value, cursor);
             if (open < 0) {
                 result.append(value, cursor, value.length());
                 break;
             }
-            int close = value.indexOf(MARKER, open + markerLength);
+            int close = nextMarker(value, open + delimiterLength(value, open));
             if (close < 0) {
                 result.append(value, cursor, value.length());
                 break;
@@ -100,10 +119,10 @@ final class PayloadMarker {
             if (index == regionIndex) {
                 result.append(replacement == null ? "" : replacement);
             } else {
-                result.append(value, open + markerLength, close);
+                result.append(value, open + delimiterLength(value, open), close);
             }
             index++;
-            cursor = close + markerLength;
+            cursor = close + delimiterLength(value, close);
         }
         return result.toString();
     }
@@ -113,7 +132,14 @@ final class PayloadMarker {
         if (value == null || value.isEmpty()) {
             return value;
         }
-        return value.replace(MARKER, "");
+        StringBuilder result = new StringBuilder(value.length());
+        int cursor = 0;
+        for (int marker = nextMarker(value, cursor); marker >= 0; marker = nextMarker(value, cursor)) {
+            result.append(value, cursor, marker);
+            cursor = marker + delimiterLength(value, marker);
+        }
+        result.append(value, cursor, value.length());
+        return result.toString();
     }
 
     /** 对每个 header 行去掉 {@code §}，用于 sniper 清理非活跃标记。 */

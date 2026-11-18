@@ -52,13 +52,17 @@ final class RequestTemplate {
                 ? helpers.analyzeRequest(request)
                 : helpers.analyzeRequest(service, request);
         List<String> headers = new ArrayList<String>(requestInfo.getHeaders());
+        for (int i = 0; i < headers.size(); i++) {
+            headers.set(i, PayloadMarker.normalizeByteMarkers(headers.get(i)));
+        }
         if (service == null) {
             service = buildServiceFromRequest(helpers, requestInfo, headers);
         }
         if (service == null) {
             throw new IllegalArgumentException("请求缺少 HTTP 服务信息。");
         }
-        String body = extractBody(helpers, request, requestInfo.getBodyOffset());
+        String body = PayloadMarker.normalizeByteMarkers(
+                extractBody(helpers, request, requestInfo.getBodyOffset()));
 
         List<PayloadInsertionPoint> insertionPoints = new ArrayList<PayloadInsertionPoint>();
         insertionPoints.addAll(PathInsertionPoint.fromRequestLine(helpers, headers, body));

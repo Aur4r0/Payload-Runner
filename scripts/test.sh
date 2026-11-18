@@ -15,4 +15,4 @@ javac --release 8 -Xlint:-options -encoding UTF-8 -d "$CLASSES_DIR" @"$SOURCES_F
 if [ -d "$ROOT_DIR/src/main/resources" ]; then
   cp -R "$ROOT_DIR/src/main/resources/." "$CLASSES_DIR/"
 fi
-java -Djava.awt.headless=true -cp "$CLASSES_DIR" com.vibecode.payloadrunner.SmokeTest
+java -Djava.awt.headless=true -cp "$CLASSES_DIR" com.vibecode.payloadrunner.SmokeTest "$@"

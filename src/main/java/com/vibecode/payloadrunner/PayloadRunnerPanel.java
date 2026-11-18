@@ -17,7 +17,6 @@ import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -195,7 +194,7 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         this.proxyHighlightSupport = proxyHighlightSupport;
         this.requestViewer = callbacks.createMessageEditor(this, false);
         this.responseViewer = callbacks.createMessageEditor(this, false);
-        this.markerEditor = callbacks.createMessageEditor(this, true);
+        this.markerEditor = new MarkerMessageEditor();
 
         loadSavedPayloads();
         loadSavedRules();
@@ -544,6 +543,13 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         followLatestCheckBox.addActionListener(event -> saveUiSettings());
         markInterestingButton.addActionListener(event -> toggleInteresting());
         markSelectionButton.addActionListener(event -> markEditorSelection());
+        ((MarkerMessageEditor) markerEditor).installActions(
+                () -> markEditorSelection(), () -> clearEditorMarkers(), () -> applyMarkerEditorEdits());
+        ((MarkerMessageEditor) markerEditor).followUiFont(mainTabs);
+        markSelectionButton.setFocusable(false);
+        clearMarkersButton.setFocusable(false);
+        markSelectionButton.setToolTipText("添加 § 标记（Ctrl/Cmd+B）");
+        clearMarkersButton.setToolTipText("清除全部标记（Ctrl/Cmd+Shift+B）");
         clearMarkersButton.addActionListener(event -> clearEditorMarkers());
         applyMessageEditButton.addActionListener(event -> applyMarkerEditorEdits());
         sendCurrentRepeaterButton.addActionListener(event -> sendCurrentToRepeater());
@@ -685,14 +691,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
         if (index < 0) {
             return;
         }
-        byte[] message = markerEditor.getMessage();
+        byte[] message = ((MarkerMessageEditor) markerEditor).selectionMessage();
         if (message == null) {
             statusLabel.setText("请求报文为空，无法标记。");
             return;
         }
         int[] bounds = markerEditor.getSelectionBounds();
         if (bounds == null || bounds.length < 2) {
-            statusLabel.setText("请先在报文中选中要注入的位置。");
+            statusLabel.setText(((MarkerMessageEditor) markerEditor).selectionError());
             return;
         }
         int start = Math.max(0, Math.min(bounds[0], bounds[1]));
@@ -701,18 +707,26 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             statusLabel.setText("请先在报文中选中要注入的位置。");
             return;
         }
-        byte[] marker = helpers.stringToBytes(PayloadMarker.MARKER);
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream(message.length + marker.length * 2);
-        buffer.write(message, 0, start);
-        buffer.write(marker, 0, marker.length);
-        buffer.write(message, start, end - start);
-        buffer.write(marker, 0, marker.length);
-        buffer.write(message, end, message.length - end);
-        byte[] marked = buffer.toByteArray();
-        markerEditor.setMessage(marked, true);
+        int bodyOffset;
+        try { bodyOffset = helpers.analyzeRequest(message).getBodyOffset(); }
+        catch (RuntimeException ex) {
+            statusLabel.setText("请求报文格式不完整，请检查请求行、Header 和空行。");
+            return;
+        }
+        if (start < bodyOffset && end > bodyOffset) {
+            statusLabel.setText("请选择同一位置的内容，不要跨越 Header 和 Body。");
+            return;
+        }
+        MarkerMessageEditor editor = (MarkerMessageEditor) markerEditor;
+        if (!editor.wrapSelection()) {
+            statusLabel.setText(editor.selectionError());
+            return;
+        }
+        String markerText = PayloadMarker.MARKER;
+        byte[] marked = editor.getMessage();
         rebuildRequestFromEditor(index, marked, start == end
-                ? "已插入注入点标记 §§。"
-                : "已用 § 包裹选中内容。");
+                ? "已插入注入点标记 " + markerText + markerText + "。"
+                : "已用 " + markerText + " 包裹选中内容。");
     }
 
     private void applyMarkerEditorEdits() {
@@ -738,13 +752,14 @@ final class PayloadRunnerPanel extends JPanel implements IMessageEditorControlle
             statusLabel.setText("请求报文为空，无标记可清除。");
             return;
         }
-        String text = helpers.bytesToString(message);
-        if (!text.contains(PayloadMarker.MARKER)) {
+        String text = PayloadMarker.normalizeByteMarkers(helpers.bytesToString(message));
+        if (!PayloadMarker.hasDelimiter(text)) {
             statusLabel.setText("当前报文没有 § 标记。");
             return;
         }
-        byte[] cleared = helpers.stringToBytes(PayloadMarker.stripMarkers(text));
-        markerEditor.setMessage(cleared, true);
+        MarkerMessageEditor editor = (MarkerMessageEditor) markerEditor;
+        editor.clearMarkers();
+        byte[] cleared = editor.getMessage();
         rebuildRequestFromEditor(index, cleared, "已清除全部 § 标记。");
     }
 

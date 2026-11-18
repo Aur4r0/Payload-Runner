@@ -57,9 +57,58 @@ import javax.swing.JTextField;
 
 public final class SmokeTest {
     public static void main(String[] args) throws Exception {
+        if (args.length == 1 && "--markers-only".equals(args[0])) {
+            testFormattedRequestMatrixAndLargeInput();
+            testUnifiedFormattedJson();
+            testUnifiedFormattedEditing();
+            testUnifiedFormattedXmlAndFallbacks();
+            testUnifiedFormattedPanelAndTheme();
+            testUtf8ContinuationIsNotMarker();
+            testMarkerRoundTripMatrix();
+            testMarkerHighlightRaster();
+            testMarkerPanelClearAfterPaste();
+            testMarkerPlainPasteAndClear();
+            testMarkerDocumentOffsetsAfterPaste();
+            testMarkerFontAndGeometry();
+            testMarkerEditorInteraction();
+            testUnicodeMarkerEditor();
+            testPayloadMarker();
+            testUtf8MarkerRoundTrip();
+            testMixedMarkerEncodings();
+            testHeaderAndBodySelectionEncoding();
+            testMarkSelectionInsertsPair();
+            testClearMarkersRemovesAllPoints();
+            testQueryInsertionPoints();
+            testPathInsertionPoints();
+            testHeaderInsertionPoints();
+            testRequestTemplateAcceptsUrlMarkerWithoutBody();
+            testRequestTemplateBuildsMissingService();
+            testFormInsertionPoints();
+            testJsonInsertionPoints();
+            testMultipartInsertionPoints();
+            testRawBodyInsertionPoints();
+            testXmlInsertionPoints();
+            System.out.println("Marker regression tests passed");
+            return;
+        }
+        testUnifiedFormattedJson();
+        testUnifiedFormattedEditing();
+        testUnifiedFormattedXmlAndFallbacks();
+        testUnifiedFormattedPanelAndTheme();
+        testUtf8ContinuationIsNotMarker();
+        testMarkerRoundTripMatrix();
+        testMarkerHighlightRaster();
+        testMarkerPanelClearAfterPaste();
+        testMarkerPlainPasteAndClear();
+        testMarkerDocumentOffsetsAfterPaste();
+        testMarkerFontAndGeometry();
+        testMarkerEditorInteraction();
+        testUnicodeMarkerEditor();
         testYamlParser();
         testDefaultPayloadResource();
         testPayloadMarker();
+        testUtf8MarkerRoundTrip();
+        testMixedMarkerEncodings();
         testAcceptHeaderNotMarked();
         testQueryInsertionPoints();
         testPathInsertionPoints();
@@ -211,6 +260,654 @@ public final class SmokeTest {
         });
     }
 
+    private static void testFormattedRequestMatrixAndLargeInput() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                java.util.Random random = new java.util.Random(8291);
+                for (int i = 0; i < 64; i++) {
+                    String ws = new String[] {"", " ", "\t", "\r\n  "}[random.nextInt(4)];
+                    String target = "value" + i + "科学ç💧😀";
+                    String body = "{" + ws + "\"target\"" + ws + ":" + ws + "\"" + target + "\"," + ws
+                            + "\"array\":" + ws + "[1," + ws + "{\"duplicate\":\"" + target + "\"}],"
+                            + ws + "\"escape\":\"a\\\"b\\\\c\\n\"" + ws + "}" + ws;
+                    String raw = "POST / HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\r\n" + body;
+                    MarkerMessageEditor editor = new MarkerMessageEditor();
+                    editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                    assertContains(editorText(editor), "\n  \"target\":", "randomized JSON displays pretty");
+                    String display = editorText(editor);
+                    int start = display.indexOf(target);
+                    editor.textView().select(start, start + target.length());
+                    assertEquals(true, editor.wrapSelection(), "randomized formatted marker");
+                    String expected = raw.replaceFirst(java.util.regex.Pattern.quote(target),
+                            java.util.regex.Matcher.quoteReplacement("§" + target + "§"));
+                    assertEquals(expected, new String(editor.getMessage(), StandardCharsets.UTF_8), "first duplicate maps to correct original position");
+                    editor.setFormatted(false); editor.setFormatted(true);
+                    editor.clearMarkers();
+                    assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "formatted matrix clear preserves exact source");
+                }
+                char[] payload = new char[70000]; Arrays.fill(payload, '<');
+                String raw = "POST / HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\r\n{\"data\":\""
+                        + new String(payload) + "\"}";
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                invokePrivate(editor, "refreshStyles", new Class<?>[0]);
+                assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "long JSON strings do not overflow syntax regex or change data");
+                StringBuilder deep = new StringBuilder();
+                for (int i = 0; i < 140; i++) { deep.append('['); }
+                deep.append('0'); for (int i = 0; i < 140; i++) { deep.append(']'); }
+                String tooDeep = "POST / HTTP/1.1\r\n\r\n" + deep;
+                assertEquals("原始", FormattedRequestView.create(tooDeep, true).format, "deep JSON falls back safely");
+                String lfHeader = "POST / HTTP/1.1\nHost: example.com\n\n";
+                assertEquals(lfHeader.length(), FormattedRequestView.bodyOffset(lfHeader + "\r\n\r\n{}"),
+                        "first header separator wins over later body whitespace");
+                StringBuilder expensive = new StringBuilder();
+                for (int i = 0; i < 60; i++) { expensive.append('['); }
+                for (int i = 0; i < 1000; i++) { if (i > 0) { expensive.append(','); } expensive.append('0'); }
+                for (int i = 0; i < 60; i++) { expensive.append(']'); }
+                String overBudget = "POST / HTTP/1.1\r\n\r\n" + expensive;
+                assertEquals("原始", FormattedRequestView.create(overBudget, true).format,
+                        "excessive display expansion falls back within memory budget");
+                System.out.println("Unified Pretty mapping matrix passed: 64 JSON scenarios plus large/deep input");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static String editorText(MarkerMessageEditor editor) throws Exception {
+        javax.swing.text.Document doc = editor.textView().getDocument();
+        return doc.getText(0, doc.getLength());
+    }
+
+    private static void testUnifiedFormattedJson() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                String body = " { \"name\":\"科学ç☧💧😀\", \"items\":[1,true,{\"id\":\"repeat\"}],"
+                        + "\"repeat\":\"repeat\",\"escaped\":\"a\\\"b\\\\c\\n\\u4e2d\",\"space\":\" a b \" } \t";
+                String raw = "POST /api?id=123 HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\r\n" + body;
+                byte[] original = raw.getBytes(StandardCharsets.UTF_8);
+                editor.setMessage(original, true);
+                assertEquals(true, editor.isFormatted(), "single editor enables pretty display");
+                assertEquals(false, editor.getComponent() instanceof JTabbedPane, "one editor has no native/marker tabs");
+                assertContains(editorText(editor), "\n  \"name\": \"科学ç☧💧😀\"", "JSON is indented in the marking editor");
+                assertEquals(true, Arrays.equals(original, editor.getMessage()), "pretty load never changes original whitespace");
+                assertEquals(false, editor.isMessageModified(), "display formatting is not a request edit");
+                String view = editorText(editor);
+                int start = view.indexOf("\"id\": \"repeat\"") + "\"id\": \"".length();
+                editor.textView().setCaretPosition(start + 6);
+                editor.textView().moveCaretPosition(start);
+                assertEquals("repeat", new String(editor.getSelectedData(), StandardCharsets.UTF_8), "pretty reverse selection maps exact duplicate value");
+                assertEquals(true, editor.wrapSelection(), "pretty selection can be marked directly");
+                String expected = raw.replace("\"id\":\"repeat\"", "\"id\":\"§repeat§\"");
+                assertEquals(expected, new String(editor.getMessage(), StandardCharsets.UTF_8), "only intended duplicate value is marked");
+                assertEquals("repeat", editor.textView().getSelectedText(), "selection remains inside displayed § pair");
+                assertContains(editorText(editor), "§repeat§", "same formatted view shows markers");
+                for (int i = 0; i < 8; i++) { editor.setFormatted(false); editor.setFormatted(true); }
+                assertEquals(expected, new String(editor.getMessage(), StandardCharsets.UTF_8), "format toggles do not write indent bytes");
+                editor.textView().select(0, editor.textView().getDocument().getLength());
+                editor.clearMarkers();
+                assertEquals(true, Arrays.equals(original, editor.getMessage()), "clear in Pretty preserves every original byte including hidden whitespace");
+                editor.textView().getActionMap().get("undo").actionPerformed(null);
+                assertEquals(expected, new String(editor.getMessage(), StandardCharsets.UTF_8), "undo clear restores raw markers");
+                editor.textView().getActionMap().get("undo").actionPerformed(null);
+                assertEquals(true, Arrays.equals(original, editor.getMessage()), "format toggles did not consume undo history");
+                FormattedRequestView projection = FormattedRequestView.create(raw, true);
+                for (int i = 0; i < raw.length(); i++) {
+                    if (Character.isWhitespace(raw.charAt(i))) { continue; }
+                    int a = projection.viewOffset(i); int b = projection.viewOffset(i + 1);
+                    int[] mapped = projection.rawSelection(a, b);
+                    assertEquals(i, mapped[0], "source character maps from pretty display");
+                    assertEquals(i + 1, mapped[1], "source character end maps from pretty display");
+                }
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testUnifiedFormattedEditing() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                String raw = "POST / HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\r\n"
+                        + "{ \"x\" : \"old\", \"data\":[1,2], \"name\":\"中文😀\" }  ";
+                editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                String view = editorText(editor);
+                int start = view.indexOf("old");
+                editor.textView().select(start, start + 3);
+                editor.textView().replaceSelection("new");
+                String edited = raw.replace("old", "new");
+                assertEquals(edited, new String(editor.getMessage(), StandardCharsets.UTF_8), "editing Pretty preserves all unrelated raw spaces");
+                editor.textView().getActionMap().get("undo").actionPerformed(null);
+                assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "undo actual edit restores raw bytes");
+                view = editorText(editor);
+                int indent = view.indexOf("\n  ") + 1;
+                editor.textView().select(indent, indent + 2);
+                byte[] before = editor.getMessage();
+                assertEquals(null, editor.getSelectionBounds(), "virtual-only selection has no injection offset");
+                assertEquals(false, editor.wrapSelection(), "virtual indentation cannot be marked as request data");
+                editor.textView().getDocument().remove(indent, 2);
+                assertEquals(true, Arrays.equals(before, editor.getMessage()), "deleting display-only indent never removes request text");
+                view = editorText(editor);
+                start = view.indexOf("[");
+                int end = view.indexOf("]", start) + 1;
+                editor.textView().select(start, end);
+                assertEquals("[1,2]", new String(editor.getSelectedData(), StandardCharsets.UTF_8), "multiline pretty selection maps compact array");
+                assertEquals(true, editor.wrapSelection(), "whole formatted subtree can be marked");
+                assertEquals(raw.replace("[1,2]", "§[1,2]§"), new String(editor.getMessage(), StandardCharsets.UTF_8), "no virtual whitespace enters subtree marker");
+                editor.clearMarkers();
+                view = editorText(editor);
+                start = view.indexOf("old");
+                editor.textView().select(start, start + 3);
+                editor.textView().getTransferHandler().importData(editor.textView(),
+                        new java.awt.datatransfer.StringSelection("科学ç💧"));
+                assertEquals(raw.replace("old", "科学ç💧"), new String(editor.getMessage(), StandardCharsets.UTF_8), "paste in Pretty updates only selected source value");
+                editor.textView().getActionMap().get("undo").actionPerformed(null);
+                assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "paste is one raw undo operation");
+                editor.textView().select(0, editor.textView().getDocument().getLength());
+                String replacement = raw.replace("[1,2]", "[3,4]");
+                editor.textView().getTransferHandler().importData(editor.textView(), new java.awt.datatransfer.StringSelection(replacement));
+                assertEquals(replacement, new String(editor.getMessage(), StandardCharsets.UTF_8), "full request paste includes replacing hidden trailing whitespace");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testUnifiedFormattedXmlAndFallbacks() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                String header = "POST / HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/xml\r\n\r\n";
+                String body = "<root><name>科学ç💧</name><value note=\"a &gt; b\">abc&amp;def</value><empty/></root>";
+                String raw = header + body;
+                editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                assertContains(editorText(editor), "\n  <name>科学ç💧</name>", "XML formatted in same editor");
+                int start = editorText(editor).indexOf("abc&amp;def");
+                editor.textView().select(start, start + "abc&amp;def".length());
+                assertEquals(true, editor.wrapSelection(), "XML leaf text can be marked in formatted display");
+                assertEquals(raw.replace("abc&amp;def", "§abc&amp;def§"), new String(editor.getMessage(), StandardCharsets.UTF_8), "XML entities remain unmodified");
+                editor.clearMarkers();
+                assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "clear formatted XML restores original compact bytes");
+                String rendered = editorText(editor);
+                int elementStart = rendered.indexOf("<value");
+                int elementEnd = rendered.indexOf("</value>", elementStart) + "</value>".length();
+                editor.textView().select(elementStart, elementEnd);
+                assertEquals(true, editor.wrapSelection(), "whole XML element can be marked in formatted display");
+                assertContains(new String(editor.getMessage(), StandardCharsets.UTF_8),
+                        "§<value note=\"a &gt; b\">abc&amp;def</value>§", "XML element marker excludes virtual indentation");
+                editor.clearMarkers();
+                assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "whole element clear preserves raw XML");
+                for (String unsupported : new String[] {
+                        header + "<p>Hello <b>world</b>!</p>",
+                        header + "<root xml:space=\"preserve\"><x/> </root>",
+                        header + "<!DOCTYPE x [<!ENTITY e SYSTEM \"file:///nonexistent\">]><x>&e;</x>",
+                        header + "<root><broken></root>",
+                        header.replace("application/xml", "application/json") + "{\"unfinished\":",
+                        header.replace("application/xml", "text/html") + "<div><p>Hello</p></div>"}) {
+                    editor.setMessage(unsupported.getBytes(StandardCharsets.UTF_8), true);
+                    assertEquals(unsupported, editorText(editor), "unsafe, mixed, unsupported, or incomplete format stays raw");
+                    assertEquals(unsupported, new String(editor.getMessage(), StandardCharsets.UTF_8), "fallback preserves exact request");
+                }
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testUnifiedFormattedPanelAndTheme() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                FakeCallbacks callbacks = new FakeCallbacks();
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                panel.addRequests(new IHttpRequestResponse[] {FakeMessage.rawRequestWithoutMarker()});
+                ((JList<?>) privateField(panel, "requestList")).setSelectedIndex(0);
+                MarkerMessageEditor editor = (MarkerMessageEditor) privateField(panel, "markerEditor");
+                String raw = "POST /api?id=123 HTTP/1.1\r\nHost: example.com\r\nX-Test: headerValue\r\n"
+                        + "Content-Type: application/json\r\n\r\n{ \"name\":\"科学ç💧\", \"data\":[1,2] }";
+                editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                for (String target : new String[] {"123", "headerValue", "科学ç💧"}) {
+                    String view = editorText(editor);
+                    int start = view.indexOf(target);
+                    editor.textView().select(start, start + target.length());
+                    ((JButton) privateField(panel, "markSelectionButton")).doClick();
+                }
+                DefaultListModel<?> model = (DefaultListModel<?>) privateField(panel, "requestModel");
+                RequestTemplate template = (RequestTemplate) model.getElementAt(0);
+                assertEquals(3, template.getInsertionPoints().size(), "single Pretty view creates URL, header, and body insertion sites");
+                for (PayloadInsertionPoint point : template.getInsertionPoints()) {
+                    String sent = new String(point.buildRequest("PAYLOAD", EncodingStrategy.RAW), StandardCharsets.UTF_8);
+                    assertContains(sent, "PAYLOAD", "formatted marker actually injects");
+                    assertEquals(false, sent.contains("§"), "formatted display markers never sent");
+                }
+                ((JButton) privateField(panel, "clearMarkersButton")).doClick();
+                assertEquals(raw, new String(((RequestTemplate) model.getElementAt(0)).getRequestBytes(), StandardCharsets.UTF_8), "panel clear preserves original compact request");
+                editor.textView().setBackground(new java.awt.Color(30, 32, 36));
+                editor.textView().setForeground(new java.awt.Color(225, 228, 232));
+                invokePrivate(editor, "refreshStyles", new Class<?>[0]);
+                assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "dark theme changes no request data");
+                JTabbedPane tabs = (JTabbedPane) privateField(panel, "mainTabs");
+                tabs.setFont(new java.awt.Font(java.awt.Font.DIALOG, java.awt.Font.BOLD, 19));
+                assertEquals(tabs.getFont().deriveFont(java.awt.Font.PLAIN), editor.textView().getFont(), "font follows request tab in ordinary weight");
+                assertEquals(false, editor.getComponent() instanceof JTabbedPane, "marker editor has no duplicate pages");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testUtf8ContinuationIsNotMarker() throws Exception {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        String unicode = "科ç☧💧";
+        String raw = "POST /?id=123 HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n\r\n"
+                + "{\"name\":\"" + unicode + "\"}";
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        String byteText = callbacks.helpers.bytesToString(bytes);
+        assertEquals(false, PayloadMarker.contains(byteText), "parser does not invent insertion points in Unicode text");
+        assertEquals(byteText, PayloadMarker.stripMarkers(byteText), "strip does not remove UTF-8 continuation bytes");
+        RequestTemplate unmarked = RequestTemplate.fromRequestBytes(callbacks.helpers,
+                callbacks.helpers.buildHttpService("example.com", 80, "http"), bytes, null);
+        assertEquals(0, unmarked.getInsertionPoints().size(), "Unicode-only request has no injection sites");
+        String marked = raw.replace("id=123", "id=§123§");
+        RequestTemplate template = RequestTemplate.fromRequestBytes(callbacks.helpers,
+                callbacks.helpers.buildHttpService("example.com", 80, "http"), marked.getBytes(StandardCharsets.UTF_8), null);
+        assertEquals(1, template.getInsertionPoints().size(), "only explicit delimiter pairs are marked");
+        String sent = new String(template.getInsertionPoints().get(0).buildRequest("PAYLOAD", EncodingStrategy.RAW), StandardCharsets.UTF_8);
+        assertContains(sent, unicode, "sending preserves non-marker Unicode bytes exactly");
+    }
+
+    private static void testMarkerRoundTripMatrix() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                int scenarios = 0;
+                for (String newline : new String[] {"\r\n", "\n", "\r", "\r\n\n"}) {
+                    for (String convention : new String[] {"\r\n", "\n", "\r"}) {
+                        for (String target : new String[] {"12345", "headValue", "中文😀body", ""}) {
+                            MarkerMessageEditor editor = new MarkerMessageEditor();
+                            String raw = "POST /api?id=12345 HTTP/1.1" + newline
+                                    + "Host: example.com" + newline + "X-Test: headValue" + newline
+                                    + newline + "中文😀body";
+                            byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+                            editor.setMessage(bytes, true);
+                            editor.textView().getDocument().putProperty(
+                                    javax.swing.text.DefaultEditorKit.EndOfLineStringProperty, convention);
+                            int start = target.isEmpty() ? raw.length() : raw.indexOf(target);
+                            editor.textView().setCaretPosition(start + target.length());
+                            editor.textView().moveCaretPosition(start);
+                            int byteStart = raw.substring(0, start).getBytes(StandardCharsets.UTF_8).length;
+                            assertEquals(byteStart, editor.getSelectionBounds()[0], "byte start after newline convention");
+                            assertEquals(true, editor.wrapSelection(), "matrix add marker");
+                            String expected = raw.substring(0, start) + "§" + target + "§"
+                                    + raw.substring(start + target.length());
+                            assertEquals(expected, new String(editor.getMessage(), StandardCharsets.UTF_8),
+                                    "matrix marks exactly selected content");
+                            invokePrivate(editor, "refreshStyles", new Class<?>[0]);
+                            editor.clearMarkers();
+                            assertEquals(true, Arrays.equals(bytes, editor.getMessage()), "matrix clear byte integrity");
+                            editor.textView().getActionMap().get("undo").actionPerformed(null);
+                            assertEquals(expected, new String(editor.getMessage(), StandardCharsets.UTF_8), "matrix undo clear");
+                            editor.textView().getActionMap().get("redo").actionPerformed(null);
+                            assertEquals(true, Arrays.equals(bytes, editor.getMessage()), "matrix redo clear");
+                            editor.clearMarkers();
+                            assertEquals(true, Arrays.equals(bytes, editor.getMessage()), "matrix repeated clear is safe");
+                            scenarios++;
+                        }
+                    }
+                }
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                byte[] prefix = "POST /?id=123 HTTP/1.1\r\nHost: example.com\r\n\r\n".getBytes(StandardCharsets.UTF_8);
+                byte[] bytes = Arrays.copyOf(prefix, prefix.length + 5);
+                System.arraycopy(new byte[] {(byte) 255, (byte) 128, (byte) 224, 0, 42}, 0, bytes, prefix.length, 5);
+                editor.setMessage(bytes, true);
+                editor.textView().select(10, 13);
+                assertEquals(true, editor.wrapSelection(), "mark with binary body");
+                editor.clearMarkers();
+                assertEquals(true, Arrays.equals(bytes, editor.getMessage()), "binary body preserved through mark and clear");
+                System.out.println("Marker integrity matrix passed: " + scenarios + " scenarios plus binary body");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testMarkerHighlightRaster() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                for (int size : new int[] {14, 20, 26}) {
+                    MarkerMessageEditor editor = new MarkerMessageEditor();
+                    JLabel font = new JLabel("请求标记");
+                    font.setFont(font.getFont().deriveFont((float) size));
+                    editor.followUiFont(font);
+                    String raw = "GET /?id=§12345§ HTTP/1.1\r\nX-Test: §header§\r\nContent-Type: application/json\r\n\r\n{\"body\":\"§abcdef§\",\"array\":[1,2]}";
+                    editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                    javax.swing.JTextPane view = editor.textView();
+                    view.getDocument().putProperty(javax.swing.text.DefaultEditorKit.EndOfLineStringProperty, "\r\n");
+                    invokePrivate(editor, "refreshStyles", new Class<?>[0]);
+                    view.setSize(1500, 500);
+                    java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(
+                            1500, 500, java.awt.image.BufferedImage.TYPE_INT_RGB);
+                    java.awt.Graphics2D graphics = image.createGraphics();
+                    view.paint(graphics);
+                    graphics.dispose();
+                    String painted = editorText(editor);
+                    java.util.List<java.awt.Rectangle> expected = new ArrayList<java.awt.Rectangle>();
+                    for (int open = painted.indexOf('§'); open >= 0;) {
+                        int close = painted.indexOf('§', open + 1);
+                        java.awt.Rectangle left = view.modelToView(open);
+                        java.awt.Rectangle right = view.modelToView(close + 1);
+                        expected.add(new java.awt.Rectangle(left.x, left.y,
+                                Math.max(1, right.x - left.x + 1), left.height));
+                        open = painted.indexOf('§', close + 1);
+                    }
+                    int[] hits = new int[expected.size()];
+                    int orange = new java.awt.Color(255, 184, 108).getRGB() & 0xffffff;
+                    for (int y = 0; y < image.getHeight(); y++) {
+                        for (int x = 0; x < image.getWidth(); x++) {
+                            if ((image.getRGB(x, y) & 0xffffff) != orange) { continue; }
+                            boolean inside = false;
+                            for (int i = 0; i < expected.size(); i++) {
+                                if (expected.get(i).contains(x, y)) { hits[i]++; inside = true; }
+                            }
+                            assertEquals(true, inside, "painted orange stays within actual marker coordinates");
+                        }
+                    }
+                    for (int hit : hits) { assertEquals(true, hit > 0, "every marker is visibly painted at correct position"); }
+                    int selectedStart = painted.indexOf("header");
+                    view.select(selectedStart, selectedStart + 6);
+                    ((javax.swing.text.DefaultCaret) view.getCaret()).setSelectionVisible(true);
+                    graphics = image.createGraphics();
+                    view.paint(graphics);
+                    graphics.dispose();
+                    java.awt.Rectangle left = view.modelToView(selectedStart);
+                    java.awt.Rectangle right = view.modelToView(selectedStart + 6);
+                    java.awt.Rectangle selectedBounds = new java.awt.Rectangle(left.x, left.y,
+                            right.x - left.x + 1, left.height);
+                    int blue = view.getSelectionColor().getRGB() & 0xffffff;
+                    int selectedPixels = 0;
+                    for (int y = 0; y < image.getHeight(); y++) {
+                        for (int x = 0; x < image.getWidth(); x++) {
+                            if ((image.getRGB(x, y) & 0xffffff) == blue) {
+                                assertEquals(true, selectedBounds.contains(x, y), "blue selection pixels align with header text");
+                                selectedPixels++;
+                            }
+                        }
+                    }
+                    assertEquals(true, selectedPixels > 0, "blue selection remains visible over orange markers");
+                }
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testMarkerPanelClearAfterPaste() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                FakeCallbacks callbacks = new FakeCallbacks();
+                PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                panel.addRequests(new IHttpRequestResponse[] {FakeMessage.rawRequestWithoutMarker()});
+                ((JList<?>) privateField(panel, "requestList")).setSelectedIndex(0);
+                MarkerMessageEditor editor = (MarkerMessageEditor) privateField(panel, "markerEditor");
+                String raw = "POST /api?id=123 HTTP/1.1\r\nHost: example.com\r\n"
+                        + "X-Test: headerValue\r\nContent-Type: text/plain\r\n\r\n中文😀bodyValue";
+                editor.textView().select(0, editor.textView().getDocument().getLength());
+                editor.textView().getTransferHandler().importData(editor.textView(),
+                        new java.awt.datatransfer.StringSelection(raw));
+                editor.textView().getDocument().putProperty(
+                        javax.swing.text.DefaultEditorKit.EndOfLineStringProperty, "\r\n");
+                for (String target : new String[] {"123", "headerValue", "中文😀bodyValue"}) {
+                    String value = editor.textView().getDocument().getText(0,
+                            editor.textView().getDocument().getLength());
+                    int start = value.indexOf(target);
+                    editor.textView().select(start, start + target.length());
+                    invokePrivate(panel, "markEditorSelection", new Class<?>[0]);
+                }
+                DefaultListModel<?> model = (DefaultListModel<?>) privateField(panel, "requestModel");
+                assertEquals(3, ((RequestTemplate) model.getElementAt(0)).getInsertionPoints().size(),
+                        "panel discovers all three accurately selected positions");
+                editor.textView().select(0, editor.textView().getDocument().getLength());
+                ((JButton) privateField(panel, "clearMarkersButton")).doClick();
+                assertEquals(1, model.size(), "clear markers keeps queued request");
+                assertEquals(0, ((RequestTemplate) model.getElementAt(0)).getInsertionPoints().size(), "clear removes only positions");
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8),
+                        ((RequestTemplate) model.getElementAt(0)).getRequestBytes()), "queue keeps original request bytes");
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8), editor.getMessage()),
+                        "visible editor keeps original request bytes");
+                ((JButton) privateField(panel, "clearMarkersButton")).doClick();
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8), editor.getMessage()),
+                        "second clear does not delete selected request text");
+                JTabbedPane tabs = (JTabbedPane) privateField(panel, "mainTabs");
+                tabs.setFont(new java.awt.Font(java.awt.Font.DIALOG, java.awt.Font.BOLD, 19));
+                assertEquals(tabs.getFont().deriveFont(java.awt.Font.PLAIN), editor.textView().getFont(),
+                        "panel editor follows request tab font in plain weight");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testMarkerPlainPasteAndClear() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                String raw = "POST /api?id=123 HTTP/1.1\r\nHost: example.com\r\n"
+                        + "X-Test: abcdef\r\n\r\n中文😀body";
+                editor.setMessage(new byte[0], true);
+                boolean pasted = editor.textView().getTransferHandler().importData(editor.textView(),
+                        new java.awt.datatransfer.StringSelection(raw));
+                assertEquals(true, pasted, "plain clipboard paste accepted");
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8), editor.getMessage()),
+                        "paste keeps CRLF bytes rather than normalizing HTTP request");
+                for (String selected : new String[] {"123", "abcdef", "中文😀body"}) {
+                    String current = editor.textView().getDocument().getText(0,
+                            editor.textView().getDocument().getLength());
+                    int start = current.indexOf(selected);
+                    editor.textView().setCaretPosition(start + selected.length());
+                    editor.textView().moveCaretPosition(start);
+                    assertEquals(true, editor.wrapSelection(), "reverse selection after paste");
+                }
+                editor.clearMarkers();
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8), editor.getMessage()),
+                        "multiple positions clear without deleting request content");
+                editor.textView().select(0, editor.textView().getDocument().getLength());
+                editor.clearMarkers();
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8), editor.getMessage()),
+                        "clear with whole request selected must not delete selection");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testMarkerDocumentOffsetsAfterPaste() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                String raw = "POST /api?id=123 HTTP/1.1\r\nHost: example.com\r\n"
+                        + "X-Test: abcdef\r\nContent-Type: text/plain\r\n\r\n中文😀body";
+                editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                // Styled editor kits may retain the newline convention detected on paste.
+                editor.textView().getDocument().putProperty(
+                        javax.swing.text.DefaultEditorKit.EndOfLineStringProperty, "\r\n");
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8), editor.getMessage()),
+                        "newline serialization property must not change request bytes");
+                int start = raw.indexOf("abcdef");
+                editor.textView().select(start, start + 6);
+                assertEquals(true, editor.wrapSelection(), "mark header after CRLF paste");
+                String marked = new String(editor.getMessage(), StandardCharsets.UTF_8);
+                assertEquals(raw.replace("abcdef", "§abcdef§"), marked,
+                        "mark only the actual document selection");
+                editor.clearMarkers();
+                assertEquals(true, Arrays.equals(raw.getBytes(StandardCharsets.UTF_8), editor.getMessage()),
+                        "clear preserves every original byte after CRLF paste");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testMarkerFontAndGeometry() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                MarkerMessageEditor editor = new MarkerMessageEditor();
+                JButton source = new JButton("UI font");
+                source.setFont(new java.awt.Font(java.awt.Font.DIALOG, java.awt.Font.BOLD, 21));
+                editor.followUiFont(source);
+                String raw = "POST /api?name=中文😀&id=12345 HTTP/1.1\r\nX-Test: abcdef\r\n\r\nbody";
+                editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                javax.swing.JTextPane view = editor.textView();
+                view.setSize(1200, 400);
+                int start = raw.indexOf("12345");
+                int end = start + 5;
+                assertEquals(source.getFont().deriveFont(java.awt.Font.PLAIN), view.getFont(), "editor follows tab font without forced bold");
+                java.awt.Rectangle before = view.modelToView(start);
+                invokePrivate(editor, "refreshStyles", new Class<?>[0]);
+                assertEquals(before, view.modelToView(start), "style refresh does not move text");
+                source.setFont(source.getFont().deriveFont(25f));
+                assertEquals(25, view.getFont().getSize(), "runtime UI font changes propagated");
+                view.setFont(new java.awt.Font(java.awt.Font.MONOSPACED, java.awt.Font.BOLD, 11));
+                assertEquals(source.getFont().deriveFont(java.awt.Font.PLAIN), view.getFont(),
+                        "Burp recursive customization cannot override tab font or force bold");
+                javax.swing.text.StyledDocument doc = view.getStyledDocument();
+                for (int i = 0; i < raw.length(); i++) {
+                    assertEquals(25, doc.getFont(doc.getCharacterElement(i).getAttributes()).getSize(),
+                            "rendered font size agrees with component font");
+                }
+                for (int i = start; i <= end; i++) {
+                    java.awt.Rectangle rect = view.modelToView(i);
+                    int actual = view.viewToModel(new java.awt.Point(rect.x, rect.y + rect.height / 2));
+                    assertEquals(i, actual, "mouse coordinates map to same character");
+                }
+                view.select(start, end);
+                assertEquals(true, editor.wrapSelection(), "mark selected characters");
+                assertEquals("12345", view.getSelectedText(), "selection still matches marked content");
+                int selectionStart = view.getSelectionStart();
+                int selectionEnd = view.getSelectionEnd();
+                invokePrivate(editor, "refreshStyles", new Class<?>[0]);
+                assertEquals(selectionStart, view.getSelectionStart(), "recolor preserves selection start");
+                assertEquals(selectionEnd, view.getSelectionEnd(), "recolor preserves selection end");
+                java.awt.Rectangle selected = view.modelToView(selectionStart);
+                assertEquals(selectionStart, view.viewToModel(new java.awt.Point(selected.x,
+                        selected.y + selected.height / 2)), "highlight and hit test stay aligned after mark");
+            } catch (Exception ex) { throw new RuntimeException(ex); }
+        });
+    }
+
+    private static void testMarkerEditorInteraction() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            MarkerMessageEditor editor = new MarkerMessageEditor();
+            String raw = "GET /?id=123 HTTP/1.1\r\nHost: example.com\r\n\r\n";
+            editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+            int start = raw.indexOf("123");
+            editor.selectBytes(start, start + 3);
+            assertEquals(true, editor.wrapSelection(), "add position without reloading document");
+            assertEquals("123", editor.textView().getSelectedText(), "selection remains inside markers");
+            boolean highlighted = false;
+            for (javax.swing.text.Highlighter.Highlight highlight : editor.textView().getHighlighter().getHighlights()) {
+                if (highlight.getStartOffset() == start && highlight.getEndOffset() == start + 5) {
+                    highlighted = true;
+                }
+            }
+            assertEquals(true, highlighted, "position highlight uses document offsets");
+            assertEquals(false, editor.wrapSelection(), "overlapping positions rejected");
+            editor.textView().getActionMap().get("undo").actionPerformed(null);
+            assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "undo marker pair atomically");
+            editor.textView().getActionMap().get("redo").actionPerformed(null);
+            String marked = new String(editor.getMessage(), StandardCharsets.UTF_8);
+            assertContains(marked, "§123§", "redo marker pair atomically");
+            editor.clearMarkers();
+            assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8), "clear leaves request unchanged");
+            editor.textView().getActionMap().get("undo").actionPerformed(null);
+            assertEquals(marked, new String(editor.getMessage(), StandardCharsets.UTF_8), "undo clear restores positions");
+            editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+            editor.selectBytes(start, start);
+            assertEquals(true, editor.wrapSelection(), "empty insertion point supported");
+            assertContains(new String(editor.getMessage(), StandardCharsets.UTF_8), "id=§§123", "empty pair inserted");
+        });
+    }
+
+    private static void testUnicodeMarkerEditor() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            MarkerMessageEditor editor = new MarkerMessageEditor();
+            String raw = "POST /§path§?id=§值§ HTTP/1.1\r\nX-Test: §head§\r\n\r\n中文😀body";
+            byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+            editor.setMessage(bytes, true);
+            assertEquals(true, Arrays.equals(bytes, editor.getMessage()), "editor preserves CRLF and UTF-8");
+            int start = raw.substring(0, raw.indexOf("body")).getBytes(StandardCharsets.UTF_8).length;
+            editor.selectBytes(start, start + 4);
+            assertEquals(start, editor.getSelectionBounds()[0], "byte offset after Chinese and emoji");
+            assertEquals(start + 4, editor.getSelectionBounds()[1], "byte selection end");
+            assertEquals("body", new String(editor.getSelectedData(), StandardCharsets.UTF_8), "selected data");
+            byte[] binary = new byte[] {0, 13, 10, (byte) 255, (byte) 192, 65};
+            assertEquals(true, Arrays.equals(binary, MarkerMessageEditor.encode(
+                    MarkerMessageEditor.decode(binary))), "non UTF-8 bytes round trip");
+            javax.swing.JTextPane view = editor.textView();
+            assertEquals(raw, view.getText(), "view displays literal section markers everywhere");
+            try { view.getDocument().insertString(view.getDocument().getLength(), "§", null); }
+            catch (javax.swing.text.BadLocationException ex) { throw new RuntimeException(ex); }
+            assertEquals(raw + "§", new String(editor.getMessage(), StandardCharsets.UTF_8), "edited Unicode view");
+        });
+    }
+
+    private static void testHeaderAndBodySelectionEncoding() throws Exception {
+        SwingUtilities.invokeAndWait(() -> {
+            try {
+                for (boolean body : new boolean[] {false, true}) {
+                    FakeCallbacks callbacks = new FakeCallbacks();
+                    PayloadRunnerPanel panel = new PayloadRunnerPanel(callbacks, callbacks.helpers);
+                    panel.addRequests(new IHttpRequestResponse[] {FakeMessage.rawRequestWithoutMarker()});
+                    ((JList<?>) privateField(panel, "requestList")).setSelectedIndex(0);
+                    MarkerMessageEditor editor = (MarkerMessageEditor) privateField(panel, "markerEditor");
+                    String raw = "POST / HTTP/1.1\r\nHost: example.com\r\nX-Test: headerValue\r\n"
+                            + "Content-Type: text/plain\r\n\r\nbodyValue";
+                    editor.setMessage(raw.getBytes(StandardCharsets.UTF_8), true);
+                    String selected = body ? "bodyValue" : "headerValue";
+                    int start = raw.indexOf(selected);
+                    editor.selectBytes(start, start + selected.length());
+                    invokePrivate(panel, "markEditorSelection", new Class<?>[0]);
+                    String delimiter = "§";
+                    assertContains(new String(editor.getMessage(), StandardCharsets.UTF_8),
+                            delimiter + selected + delimiter, "selection uses position-specific encoding");
+                    invokePrivate(panel, "clearEditorMarkers", new Class<?>[0]);
+                    assertEquals(raw, new String(editor.getMessage(), StandardCharsets.UTF_8),
+                            "clear restores exact original request");
+                }
+            } catch (Exception ex) {
+                throw new RuntimeException(ex);
+            }
+        });
+    }
+
+    private static void testMixedMarkerEncodings() throws Exception {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        String raw = "POST /~PR~segment~PR~?id=~PR~1~PR~ HTTP/1.1\r\n"
+                + "Host: example.com\r\nX-Test: ~PR~old~PR~\r\n"
+                + "Content-Type: application/json\r\n\r\n{\"name\":\"中文§value§\"}";
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        RequestTemplate template = RequestTemplate.fromRequestBytes(callbacks.helpers,
+                callbacks.helpers.buildHttpService("example.com", 80, "http"), bytes, null);
+        assertEquals(4, template.getInsertionPoints().size(), "mixed path/query/header/body markers");
+        for (PayloadInsertionPoint point : template.getInsertionPoints()) {
+            String sent = new String(point.buildRequest("REPLACED", EncodingStrategy.RAW),
+                    StandardCharsets.UTF_8);
+            assertContains(sent, "REPLACED", "mixed marker payload inserted");
+            assertContains(sent, "中文", "mixed markers preserve UTF-8 body");
+            assertEquals(false, sent.contains("~PR~"), "ASCII markers removed before send");
+            assertEquals(false, sent.contains("§"), "UTF-8 markers removed before send");
+            assertEquals(false, sent.contains("\ufffd"), "no invalid UTF-8 after send");
+        }
+        String cleared = PayloadMarker.stripMarkers(PayloadMarker.normalizeByteMarkers(
+                callbacks.helpers.bytesToString(bytes)));
+        assertEquals(raw.replace("~PR~", "").replace("§", ""),
+                new String(callbacks.helpers.stringToBytes(cleared), StandardCharsets.UTF_8),
+                "clear mixed markers preserves original content");
+    }
+
+    private static void testUtf8MarkerRoundTrip() throws Exception {
+        FakeCallbacks callbacks = new FakeCallbacks();
+        String raw = "POST /?id=§1§ HTTP/1.1\r\nHost: example.com\r\n"
+                + "Content-Type: application/json\r\nX-Test: §old§\r\n\r\n"
+                + "{\"name\":\"中文§value§\"}";
+        byte[] bytes = raw.getBytes(StandardCharsets.UTF_8);
+        RequestTemplate template = RequestTemplate.fromRequestBytes(callbacks.helpers,
+                callbacks.helpers.buildHttpService("example.com", 80, "http"), bytes, null);
+        assertEquals(3, template.getInsertionPoints().size(), "UTF-8 query/header/body markers");
+        assertEquals(true, Arrays.equals(bytes, template.getRequestBytes()), "editor bytes preserved");
+        for (PayloadInsertionPoint point : template.getInsertionPoints()) {
+            String sent = new String(point.buildRequest("REPLACED", EncodingStrategy.RAW),
+                    StandardCharsets.UTF_8);
+            assertContains(sent, "中文", "unmarked UTF-8 content preserved");
+            assertContains(sent, "REPLACED", "payload inserted");
+            assertEquals(false, sent.contains("§"), "UTF-8 markers fully removed on send");
+            assertEquals(false, sent.contains("\ufffd"), "no broken UTF-8 marker bytes remain");
+        }
+        String byteText = callbacks.helpers.bytesToString(bytes);
+        String cleared = PayloadMarker.stripMarkers(PayloadMarker.normalizeByteMarkers(byteText));
+        assertEquals(raw.replace("§", ""), new String(callbacks.helpers.stringToBytes(cleared),
+                StandardCharsets.UTF_8), "clear preserves UTF-8 body");
+    }
+
     private static void testMarkSelectionInsertsPair() throws Exception {
         final FakeCallbacks callbacks = new FakeCallbacks();
         SwingUtilities.invokeAndWait(() -> {
@@ -224,18 +921,18 @@ public final class SmokeTest {
                 @SuppressWarnings("unchecked")
                 DefaultListModel<RequestTemplate> requestModel =
                         (DefaultListModel<RequestTemplate>) privateField(panel, "requestModel");
-                FakeMessageEditor markerEditor =
-                        (FakeMessageEditor) privateField(panel, "markerEditor");
+                MarkerMessageEditor markerEditor =
+                        (MarkerMessageEditor) privateField(panel, "markerEditor");
 
                 requestList.setSelectedIndex(0);
                 String message = callbacks.helpers.bytesToString(markerEditor.getMessage());
                 int start = message.indexOf("id=") + 3;
                 int end = message.indexOf(' ', start);
-                markerEditor.selectionBounds = new int[] {start, end};
+                markerEditor.selectBytes(start, end);
                 invokePrivate(panel, "markEditorSelection", new Class<?>[0]);
 
-                String marked = callbacks.helpers.bytesToString(markerEditor.getMessage());
-                assertContains(marked, "id=§1§", "selection wrapped in marker pair");
+                String marked = new String(markerEditor.getMessage(), StandardCharsets.UTF_8);
+                assertContains(marked, "id=§1§", "URL selection uses section marker pair");
                 assertEquals(1, requestModel.getElementAt(0).getInsertionPoints().size(),
                         "marked request has one insertion point");
             } catch (Exception ex) {
@@ -257,14 +954,14 @@ public final class SmokeTest {
                 @SuppressWarnings("unchecked")
                 DefaultListModel<RequestTemplate> requestModel =
                         (DefaultListModel<RequestTemplate>) privateField(panel, "requestModel");
-                FakeMessageEditor markerEditor =
-                        (FakeMessageEditor) privateField(panel, "markerEditor");
+                MarkerMessageEditor markerEditor =
+                        (MarkerMessageEditor) privateField(panel, "markerEditor");
 
                 requestList.setSelectedIndex(0);
                 String message = callbacks.helpers.bytesToString(markerEditor.getMessage());
                 int start = message.indexOf("id=") + 3;
                 int end = message.indexOf(' ', start);
-                markerEditor.selectionBounds = new int[] {start, end};
+                markerEditor.selectBytes(start, end);
                 invokePrivate(panel, "markEditorSelection", new Class<?>[0]);
                 assertEquals(1, requestModel.getElementAt(0).getInsertionPoints().size(),
                         "request marked before clear");
